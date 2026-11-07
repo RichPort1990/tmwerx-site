@@ -22,7 +22,7 @@ fallthrough = true
 [[d1_databases]]
 binding = "DB"
 database_name = "tmwerx"
-database_id = "REPLACE-WITH-THE-ID-FROM-wrangler-d1-create"   # Western Europe: npx wrangler d1 create tmwerx --location weur
+database_id = "2b2d7b12-bcdd-4b68-aa05-a7f85c70a5f9"
 migrations_dir = "migrations"
 
 [[r2_buckets]]
