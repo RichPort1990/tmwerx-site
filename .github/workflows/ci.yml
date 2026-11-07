@@ -1,0 +1,74 @@
+name: Checks
+
+# Every push and pull request: formatting and lint, the build, then the browser test of the office and crew apps
+# against a local copy of the Worker (mock Stripe, local database and file store). When they all pass on main, the commit is moved on to the
+# `production` branch, which is what Cloudflare Workers Builds deploys: code that fails the tests never goes live.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install
+        run: |
+          npm ci
+          pip install -q -r test/requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Format and lint
+        run: npm run check
+
+      - name: Build
+        run: node scripts/build.mjs
+
+      - name: Start the local server
+        run: |
+          grep -v '^routes' wrangler.toml | sed 's/REPLACE-WITH-THE-ID-FROM-wrangler-d1-create/00000000-0000-0000-0000-000000000000/' > .wrangler-test.toml
+          npx wrangler d1 migrations apply tmwerx -c .wrangler-test.toml --local
+          sh test/dev.sh > dev.log 2>&1 &
+          for i in $(seq 1 90); do curl -sf http://localhost:8787/healthz > /dev/null && break; sleep 2; done
+          curl -sf http://localhost:8787/healthz
+
+      - name: End-to-end test (office app, crew app with and without signal, packs, requests, alarms)
+        run: python3 test/tm.py
+
+      - name: Server log on failure
+        if: failure()
+        run: tail -200 dev.log
+
+  # only tested code goes live: Cloudflare deploys the production branch, moved on here once every check has passed
+  promote:
+    needs: checks
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Move production on to this commit
+        run: git push origin "${GITHUB_SHA}:refs/heads/production"

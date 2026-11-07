@@ -1,0 +1,10 @@
+/crew/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: same-origin
+  Permissions-Policy: camera=(self), geolocation=(self)
+/crew/sw.js
+  Cache-Control: no-cache
+  Service-Worker-Allowed: /crew/
+/assets/*
+  X-Content-Type-Options: nosniff

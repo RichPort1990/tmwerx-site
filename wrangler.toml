@@ -1,0 +1,76 @@
+name = "tmwerx"
+main = "src/worker.js"
+compatibility_date = "2026-10-01"
+keep_vars = true
+workers_dev = false                             # only on your own domain, not *.workers.dev
+routes = [{ pattern = "tmwerx.co.uk", custom_domain = true }]
+
+[build]
+command = "node scripts/build.mjs"
+watch_dir = "src"
+
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = true
+
+[[rules]]
+type = "Data"
+globs = ["**/*.woff2"]
+fallthrough = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "tmwerx"
+database_id = "REPLACE-WITH-THE-ID-FROM-wrangler-d1-create"   # Western Europe: npx wrangler d1 create tmwerx --location weur
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "tmwerx-files-eu"               # logos, drawings, photos, documents (private; served only to signed-in users)
+
+# CAD WerX: issued drawings are read from the cadwerx Worker through a private service binding (no public address).
+# Switch this on once CAD WerX has its "Issue for use" endpoints (see README, Linking CAD WerX).
+# [[services]]
+# binding = "CADWERX"
+# service = "cadwerx"
+
+[version_metadata]
+binding = "CF_VERSION"
+
+[assets]
+directory = "./public"
+
+[vars]
+APP_NAME = "TM WerX"
+PRICE_GBP = "100"                               # per user per month, before VAT: shown on the home and billing pages (Stripe charges the price STRIPE_PRICE_ID names: keep them the same)
+VAT_REGISTERED = "0"                            # "1" once registered: prices then shown plus VAT at 20%
+PROVIDER_NAME = "CAD WerX Limited"              # the company selling the service, as on the agreement
+PROVIDER_ADDRESS = "Unit 7 Bridge View Park, Henry Boot Way, Hull, HU4 7DW"
+PROVIDER_NUMBER = "17362101"
+PROVIDER_ICO = ""                               # fill in: the ICO registration number
+SUPPORT_EMAIL = "support@tmwerx.co.uk"
+INTAKE_DOMAIN = "tmwerx.co.uk"                  # job requests are forwarded to jobs+<company key>@ this domain
+STRIPE_PRICE_ID = "price_REPLACE"               # monthly per-user price, "TM WerX user" (test mode until launch)
+STRIPE_API_BASE = "https://api.stripe.com"
+EMAIL_FROM = "TM WerX <no-reply@tmwerx.co.uk>"
+VAPID_SUBJECT = "mailto:support@tmwerx.co.uk"   # who the push services contact about our notifications
+DEV_MODE = "0"                                  # "1" only for local testing: emails go to /dev/outbox instead of being sent
+TRIAL_DAYS = "0"
+STRIPE_PROMO_CODES = "0"
+STRIPE_AUTOMATIC_TAX = "0"
+# Secrets (Cloudflare dashboard, or npx wrangler secret put NAME), never in this file:
+#   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, RESEND_API_KEY, BACKUP_KEY,
+#   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY (phone notifications: node scripts/vapid.mjs makes a pair),
+#   CADWERX_LINK_SECRET (shared with CAD WerX for the drawing link), ADMIN_EMAILS, SIGNUP_ALLOW
+
+[triggers]
+crons = ["* * * * *", "17 3 * * SUN"]   # every minute: photo schedules, alerts, check-ins (and the half-hourly
+                                        # clean-ups on the hour and half hour); Sunday 03:17 UTC: the weekly backup
+
+# the weekly backup and the daily clean-ups read whole tables: up to 5 minutes of CPU (Workers Paid)
+[limits]
+cpu_ms = 300000
+
+[observability]
+enabled = true

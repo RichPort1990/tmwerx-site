@@ -1,0 +1,26 @@
+{
+  "name": "tmwerx",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "wrangler dev --local",
+    "deploy": "node scripts/build.mjs && wrangler deploy",
+    "migrate": "wrangler d1 migrations apply tmwerx --remote",
+    "vapid": "node scripts/vapid.mjs",
+    "format": "node scripts/format.mjs",
+    "lint": "eslint .",
+    "check": "node scripts/format.mjs --check && eslint ."
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "eslint": "^9.13.0",
+    "eslint-plugin-html": "^8.1.2",
+    "globals": "^15.11.0",
+    "prettier": "^3.3.3",
+    "terser": "^5.36.0",
+    "wrangler": "4.151.0"
+  },
+  "private": true
+}

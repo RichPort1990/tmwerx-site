@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+.wrangler-test.toml
+.dev.vars
+build/
+test/golden/.browser-state.json
+test/__pycache__/
+test/.cdn/
