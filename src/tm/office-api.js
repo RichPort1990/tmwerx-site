@@ -10,6 +10,7 @@ import { pushTo } from './push.js';
 import { makeRouter } from './router.js';
 import { STARTER, STARTER_RULES, TM_TYPES, VISIT_KINDS, PHOTO_CATS } from './starter.js';
 import {
+  ukDate,
   DEFAULT_SETTINGS,
   bad,
   body,
@@ -29,7 +30,18 @@ import {
 } from './util.js';
 
 const R = makeRouter();
-const inQ = a => `(${a.map(() => '?').join(',') || "''"})`;
+
+// an id the browser sent, kept only if that row is this company's (and, for visits, this job's)
+async function own(env, u, table, id, jobId) {
+  id = str(id, 64);
+  if (!id) return null;
+  const r = await env.DB.prepare(
+    `SELECT 1 FROM ${table} WHERE id = ? AND company_id = ?${jobId ? ' AND job_id = ?' : ''}`
+  )
+    .bind(...[id, u.company_id, ...(jobId ? [jobId] : [])])
+    .first();
+  return r ? id : null;
+}
 
 /* ---------- first use: starter documents, photo rules and settings ---------- */
 export async function ensureCompany(env, u) {
@@ -394,7 +406,7 @@ R.add('POST', '/jobs/:id/note', async (env, u, req, p) => {
     id: uid(),
     company_id: u.company_id,
     job_id: j.id,
-    visit_id: str(b.visit_id, 64),
+    visit_id: await own(env, u, 'tm_visits', b.visit_id, j.id),
     vehicle_id: null,
     user_id: u.id,
     kind: 'note',
@@ -441,7 +453,7 @@ R.add('POST', '/jobs/:id/drawing', async (env, u, req, p, url) => {
   const buf = await readBody(req, PDF_MAX);
   if (!buf) return bad('The PDF must be 25 MB or smaller.', 413);
   if (sniff(buf) !== 'application/pdf') return bad('That file is not a PDF.');
-  const rev = str(url.searchParams.get('rev'), 20) || 'A';
+  const rev = (str(url.searchParams.get('rev'), 20) || 'A').replace(/[^\w.-]/g, '_');
   let equipment = [];
   try {
     equipment = cleanEquipment(JSON.parse(decodeURIComponent(req.headers.get('X-Equipment') || '[]')));
@@ -564,9 +576,9 @@ async function visitPatch(env, u, b, v) {
     if (ids.length) {
       const vs = (
         await env.DB.prepare(
-          `SELECT id, reg, unsafe, off_road FROM tm_vehicles WHERE company_id = ? AND id IN ${inQ(ids)}`
+          `SELECT id, reg, unsafe, off_road FROM tm_vehicles WHERE company_id = ? AND id IN (SELECT value FROM json_each(?))`
         )
-          .bind(u.company_id, ...ids)
+          .bind(u.company_id, JSON.stringify(ids))
           .all()
       ).results;
       if (vs.length !== ids.length) return { error: 'unknown vehicle' };
@@ -598,9 +610,9 @@ async function setCrew(env, u, visit, crew) {
   const ppl = ids.length
     ? (
         await env.DB.prepare(
-          `SELECT id, name, day_cost, role, disabled FROM users WHERE company_id = ? AND id IN ${inQ(ids)}`
+          `SELECT id, name, day_cost, role, disabled FROM users WHERE company_id = ? AND id IN (SELECT value FROM json_each(?))`
         )
-          .bind(u.company_id, ...ids)
+          .bind(u.company_id, JSON.stringify(ids))
           .all()
       ).results
     : [];
@@ -624,17 +636,17 @@ async function setCrew(env, u, visit, crew) {
     const clash = (
       await env.DB.prepare(
         `SELECT x.name, j.number FROM tm_assign a JOIN tm_visits v ON v.id = a.visit_id JOIN tm_jobs j ON j.id = v.job_id JOIN users x ON x.id = a.user_id
-         WHERE a.user_id IN ${inQ(ids)} AND v.date = ? AND v.id <> ? AND v.status NOT IN ('cancelled')`
+         WHERE a.user_id IN (SELECT value FROM json_each(?)) AND v.date = ? AND v.id <> ? AND v.status NOT IN ('cancelled')`
       )
-        .bind(...ids, visit.date, visit.id)
+        .bind(JSON.stringify(ids), visit.date, visit.id)
         .all()
     ).results;
     for (const c of clash) warn.push(`${c.name} is also on ${c.number} that day.`);
     const quals = (
       await env.DB.prepare(
-        `SELECT q.*, x.name AS person FROM tm_quals q JOIN users x ON x.id = q.user_id WHERE q.company_id = ? AND q.user_id IN ${inQ(ids)}`
+        `SELECT q.*, x.name AS person FROM tm_quals q JOIN users x ON x.id = q.user_id WHERE q.company_id = ? AND q.user_id IN (SELECT value FROM json_each(?))`
       )
-        .bind(u.company_id, ...ids)
+        .bind(u.company_id, JSON.stringify(ids))
         .all()
     ).results;
     for (const q2 of quals)
@@ -787,9 +799,7 @@ R.add('POST', '/jobs/:id/photo', async (env, u, req, p, url) => {
 
 /* ---------- the board and the live view ---------- */
 R.add('GET', '/board', async (env, u, req, p, url) => {
-  const from = isDate(url.searchParams.get('from'))
-    ? url.searchParams.get('from')
-    : new Date().toISOString().slice(0, 10);
+  const from = isDate(url.searchParams.get('from')) ? url.searchParams.get('from') : ukDate();
   const to = isDate(url.searchParams.get('to')) ? url.searchParams.get('to') : from;
   const visits = (
     await env.DB.prepare(
@@ -802,9 +812,9 @@ R.add('GET', '/board', async (env, u, req, p, url) => {
   const assign = visits.length
     ? (
         await env.DB.prepare(
-          `SELECT a.*, x.name FROM tm_assign a JOIN users x ON x.id = a.user_id WHERE a.visit_id IN ${inQ(visits.map(v => v.id))}`
+          `SELECT a.*, x.name FROM tm_assign a JOIN users x ON x.id = a.user_id WHERE a.visit_id IN (SELECT value FROM json_each(?))`
         )
-          .bind(...visits.map(v => v.id))
+          .bind(JSON.stringify(visits.map(v => v.id)))
           .all()
       ).results
     : [];
@@ -815,7 +825,7 @@ R.add('GET', '/board', async (env, u, req, p, url) => {
   });
 });
 R.add('GET', '/live', async (env, u) => {
-  const t = new Date().toISOString().slice(0, 10);
+  const t = ukDate();
   const [jobs, visits, tasks, alerts, crew, locs, lone] = await Promise.all([
     env.DB.prepare(
       "SELECT j.*, c.name AS client_name FROM tm_jobs j LEFT JOIN tm_clients c ON c.id = j.client_id WHERE j.company_id = ? AND j.status = 'in_progress' ORDER BY j.number"
@@ -851,14 +861,14 @@ R.add('GET', '/live', async (env, u) => {
   const [assign, ev] = vids.length
     ? await Promise.all([
         env.DB.prepare(
-          `SELECT a.*, x.name FROM tm_assign a JOIN users x ON x.id = a.user_id WHERE a.visit_id IN ${inQ(vids)}`
+          `SELECT a.*, x.name FROM tm_assign a JOIN users x ON x.id = a.user_id WHERE a.visit_id IN (SELECT value FROM json_each(?))`
         )
-          .bind(...vids)
+          .bind(JSON.stringify(vids))
           .all(),
         env.DB.prepare(
-          `SELECT visit_id, user_id, kind, client_time, server_time FROM tm_events WHERE visit_id IN ${inQ(vids)} ORDER BY server_time`
+          `SELECT visit_id, user_id, kind, client_time, server_time FROM tm_events WHERE company_id = ? AND visit_id IN (SELECT value FROM json_each(?)) ORDER BY server_time`
         )
-          .bind(...vids)
+          .bind(u.company_id, JSON.stringify(vids))
           .all(),
       ])
     : [{ results: [] }, { results: [] }];
@@ -949,7 +959,7 @@ R.add('POST', '/requests/:id/approved', async (env, u, req, p) => {
   const r = await env.DB.prepare(
     "UPDATE tm_intake SET status = 'approved', job_id = ?, decided_by = ?, decided_at = ? WHERE id = ? AND company_id = ? AND status = 'new'"
   )
-    .bind(str(b && b.job_id, 64), u.id, now(), p.id, u.company_id)
+    .bind(await own(env, u, 'tm_jobs', b && b.job_id), u.id, now(), p.id, u.company_id)
     .run();
   return r.meta.changes ? ok() : bad('not found', 404);
 });
@@ -959,13 +969,16 @@ R.add('POST', '/requests/extract', async (env, u, req) => {
 });
 
 /* ---------- people: office users (invited by email on the Account page) and crew logins ---------- */
+// three words and three digits (about 28 bits), easy to read out over the phone; sign-in is rate limited
+const WORDS = (
+  'amber anchor badger beacon bridge cedar cobalt copper delta ember falcon flint granite harbour heron hollow ' +
+  'island ivory juniper kestrel lantern larch maple marble meadow nimbus oak orchid otter pebble pepper pine quarry ' +
+  'raven ridge river robin saddle salmon shale sparrow spruce stone summit thistle timber tundra umber valley ' +
+  'velvet violet walnut willow winter wren yarrow zephyr birch canyon cliff comet coral dune fern'
+).split(' ');
 const crewPassword = () => {
-  const w =
-    'amber bridge cedar delta ember falcon granite harbour island juniper kestrel lantern maple nimbus orchid pepper quarry river saddle timber umber violet willow yarrow'.split(
-      ' '
-    );
-  const r = crypto.getRandomValues(new Uint32Array(3));
-  return `${w[r[0] % w.length]}-${w[r[1] % w.length]}-${100 + (r[2] % 900)}`;
+  const r = crypto.getRandomValues(new Uint32Array(4));
+  return `${WORDS[r[0] % WORDS.length]}-${WORDS[r[1] % WORDS.length]}-${WORDS[r[2] % WORDS.length]}-${100 + (r[3] % 900)}`;
 };
 R.add('POST', '/people', async (env, u, req) => {
   const b = await body(req);
@@ -1326,6 +1339,23 @@ R.add('PUT', '/rules/:id', async (env, u, req, p) => {
 });
 
 /* ---------- settings ---------- */
+// a new job request address (the old one stops working at once): for when it has been passed around too widely
+R.add('POST', '/settings/intake-key', async (env, u) => {
+  if (u.role !== 'admin') return bad('Only an administrator can change the job request address.', 403);
+  const key = randToken()
+    .slice(0, 12)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, 'x');
+  await env.DB.batch([
+    env.DB.prepare('UPDATE tm_settings SET intake_key = ?, updated_at = ? WHERE company_id = ?').bind(
+      key,
+      now(),
+      u.company_id
+    ),
+    logStmt(env, u, 'job request address changed', 'settings', null),
+  ]);
+  return ok({ intake_address: `jobs+${key}@${env.INTAKE_DOMAIN || 'tmwerx.co.uk'}` });
+});
 R.add('PUT', '/settings', async (env, u, req) => {
   if (u.role !== 'admin') return bad('Only an administrator can change settings.', 403);
   const b = (await body(req)) || {};
@@ -1386,23 +1416,21 @@ export async function timesheet(env, cid, from, to) {
   for (const s of open.values())
     shifts.push({ user_id: s.user_id, name: s.name, start: s.t, end: null, visit_id: s.visit_id });
   const inRange = shifts.filter(s => {
-    const d = new Date(s.start).toISOString().slice(0, 10);
+    const d = ukDate(s.start);
     return d >= from && d <= to;
   });
   return inRange;
 }
 R.add('GET', '/time', async (env, u, req, p, url) => {
-  const from = isDate(url.searchParams.get('from'))
-    ? url.searchParams.get('from')
-    : new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
-  const to = isDate(url.searchParams.get('to')) ? url.searchParams.get('to') : new Date().toISOString().slice(0, 10);
+  const from = isDate(url.searchParams.get('from')) ? url.searchParams.get('from') : ukDate(Date.now() - 6 * 864e5);
+  const to = isDate(url.searchParams.get('to')) ? url.searchParams.get('to') : ukDate();
   const shifts = await timesheet(env, u.company_id, from, to);
   const visits = shifts.length
     ? (
         await env.DB.prepare(
-          `SELECT v.id, j.number, j.address FROM tm_visits v JOIN tm_jobs j ON j.id = v.job_id WHERE v.id IN ${inQ([...new Set(shifts.map(s => s.visit_id).filter(Boolean))])}`
+          `SELECT v.id, j.number, j.address FROM tm_visits v JOIN tm_jobs j ON j.id = v.job_id WHERE v.company_id = ? AND v.id IN (SELECT value FROM json_each(?))`
         )
-          .bind(...new Set(shifts.map(s => s.visit_id).filter(Boolean)))
+          .bind(u.company_id, JSON.stringify([...new Set(shifts.map(s => s.visit_id).filter(Boolean))]))
           .all()
       ).results
     : [];
@@ -1500,8 +1528,8 @@ R.add('POST', '/audits', async (env, u, req) => {
     ).bind(
       id,
       u.company_id,
-      str(b.job_id, 64),
-      str(b.visit_id, 64),
+      await own(env, u, 'tm_jobs', b.job_id),
+      await own(env, u, 'tm_visits', b.visit_id),
       u.id,
       JSON.stringify({ items, notes: str(b.notes, 2000) }),
       score,
@@ -1520,10 +1548,8 @@ R.add('POST', '/audits', async (env, u, req) => {
 
 /* ---------- costs and invoicing ---------- */
 R.add('GET', '/costs', async (env, u, req, p, url) => {
-  const from = isDate(url.searchParams.get('from'))
-    ? url.searchParams.get('from')
-    : new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
-  const to = isDate(url.searchParams.get('to')) ? url.searchParams.get('to') : new Date().toISOString().slice(0, 10);
+  const from = isDate(url.searchParams.get('from')) ? url.searchParams.get('from') : ukDate(Date.now() - 6 * 864e5);
+  const to = isDate(url.searchParams.get('to')) ? url.searchParams.get('to') : ukDate();
   const visits = (
     await env.DB.prepare(
       `SELECT v.id, v.job_id, v.date, v.kind, v.status, v.client_rate AS visit_rate, j.number, j.address, j.client_id, j.client_rate, j.charge_basis, j.invoice_ready, j.invoiced_at, j.tm_type,
@@ -1536,9 +1562,9 @@ R.add('GET', '/costs', async (env, u, req, p, url) => {
   const assign = visits.length
     ? (
         await env.DB.prepare(
-          `SELECT a.visit_id, a.cost, x.name FROM tm_assign a JOIN users x ON x.id = a.user_id WHERE a.visit_id IN ${inQ(visits.map(v => v.id))}`
+          `SELECT a.visit_id, a.cost, x.name FROM tm_assign a JOIN users x ON x.id = a.user_id WHERE a.visit_id IN (SELECT value FROM json_each(?))`
         )
-          .bind(...visits.map(v => v.id))
+          .bind(JSON.stringify(visits.map(v => v.id)))
           .all()
       ).results
     : [];
@@ -1643,6 +1669,7 @@ R.add('GET', '/jobs/:id/pack', async (env, u, req, p, url) => {
   return evidencePack(env, u, j, { blank: url.searchParams.get('blank') === '1', base: '/api/office' });
 });
 R.add('GET', '/export', async (env, u) => {
+  if (u.role !== 'admin') return bad('Only an administrator can download all the company data.', 403);
   const tables = [
     'tm_jobs',
     'tm_visits',

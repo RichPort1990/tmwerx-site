@@ -127,6 +127,13 @@ async function route(req, env, ctx) {
     (await endedHere(req, env))
   )
     return redirect('/login?m=elsewhere', { 'Set-Cookie': clearCookie });
+  // crew logins have the crew app only: the office's account, billing, agreement and admin pages are not theirs
+  if (
+    u &&
+    ['lead', 'engineer'].includes(u.role) &&
+    /^\/(app|account|billing|agreement|admin|verify-sent)(\/|$)/.test(path)
+  )
+    return redirect('/crew/');
   let F = null;
   if (M === 'POST') {
     const body = await readBody(req, path === '/account/logo' || path === '/admin/logo' ? 1300000 : 32768);

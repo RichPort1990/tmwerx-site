@@ -7,7 +7,9 @@ export const OFFICE = new Set(['admin', 'office']);
 export const CREW = new Set(['lead', 'engineer']);
 export const bad = (m, status = 400) => json({ ok: false, error: m }, status);
 export const ok = (o = {}) => json(Object.assign({ ok: true }, o));
-export const today = () => new Date().toISOString().slice(0, 10);
+// the calendar date in the UK (BST or GMT) for a moment: YYYY-MM-DD. Visits are booked in UK dates.
+export const ukDate = (ms = Date.now()) => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+export const today = () => ukDate();
 export const isDate = s => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
 export const isTime = s => typeof s === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
 export const str = (v, max = 500) =>

@@ -2,18 +2,18 @@
 // and sent later), and register the phone for notifications.
 import { checkPassword, startSession } from '../auth.js';
 import { CK, ipKey, json, now, readBody, sha256, tooMany } from '../lib/core.js';
-import { cleanEvent, applyEvent, insertEvent } from './events.js';
+import { cleanEvent, applyEvent, insertEvent, phoneTime } from './events.js';
 import { PHOTO_MAX, ext, putOnce, serve, sha256buf, sniff } from './files.js';
 import { makeRouter } from './router.js';
 import { matchPhoto, rulesFor } from './tasks.js';
-import { bad, body, crewUser, num, ok, pj, settings, str } from './util.js';
+import { ukDate, bad, body, crewUser, num, ok, pj, settings, str } from './util.js';
 
 const R = makeRouter();
 
 // the jobs this person may see: sent to the phones, with a visit they are on from 14 days ago to 60 days ahead
 async function myVisits(env, u) {
-  const from = new Date(now() - 14 * 864e5).toISOString().slice(0, 10),
-    to = new Date(now() + 60 * 864e5).toISOString().slice(0, 10);
+  const from = ukDate(now() - 14 * 864e5),
+    to = ukDate(now() + 60 * 864e5);
   return (
     await env.DB.prepare(
       `SELECT v.*, a.lead FROM tm_visits v JOIN tm_assign a ON a.visit_id = v.id JOIN tm_jobs j ON j.id = v.job_id
@@ -29,6 +29,14 @@ async function mayJob(env, u, jobId) {
   )
     .bind(u.id, jobId, u.company_id)
     .first());
+}
+// one of this person's visits, on a job sent to the phones (null if not)
+async function myVisit(env, u, visitId) {
+  return env.DB.prepare(
+    'SELECT v.* FROM tm_visits v JOIN tm_assign a ON a.visit_id = v.id JOIN tm_jobs j ON j.id = v.job_id WHERE v.id = ? AND a.user_id = ? AND v.company_id = ? AND j.sent_version > 0'
+  )
+    .bind(visitId, u.id, u.company_id)
+    .first();
 }
 const currentDocs = async (env, cid) => {
   const rows = (
@@ -49,33 +57,32 @@ const currentDocs = async (env, cid) => {
 R.add('GET', '/sync', async (env, u) => {
   const visits = await myVisits(env, u);
   const jobIds = [...new Set(visits.map(v => v.job_id))];
-  const inJ = a => `(${a.map(() => '?').join(',') || "''"})`;
   const [jobs, crew, drawings, events, photos, tasks, vehicles, docs, s, clients] = await Promise.all([
     jobIds.length
-      ? env.DB.prepare(`SELECT * FROM tm_jobs WHERE company_id = ? AND id IN ${inJ(jobIds)}`)
-          .bind(u.company_id, ...jobIds)
+      ? env.DB.prepare(`SELECT * FROM tm_jobs WHERE company_id = ? AND id IN (SELECT value FROM json_each(?))`)
+          .bind(u.company_id, JSON.stringify(jobIds))
           .all()
       : { results: [] },
     jobIds.length
       ? env.DB.prepare(
-          `SELECT a.visit_id, a.user_id, a.lead, x.name, x.phone FROM tm_assign a JOIN tm_visits v ON v.id = a.visit_id JOIN users x ON x.id = a.user_id WHERE v.company_id = ? AND v.job_id IN ${inJ(jobIds)}`
+          `SELECT a.visit_id, a.user_id, a.lead, x.name, x.phone FROM tm_assign a JOIN tm_visits v ON v.id = a.visit_id JOIN users x ON x.id = a.user_id WHERE v.company_id = ? AND v.job_id IN (SELECT value FROM json_each(?))`
         )
-          .bind(u.company_id, ...jobIds)
+          .bind(u.company_id, JSON.stringify(jobIds))
           .all()
       : { results: [] },
     jobIds.length
       ? env.DB.prepare(
-          `SELECT id, job_id, rev, source, drawing_no, approved_by, approved_at, sha256, pages, equipment, note, created_at FROM tm_drawings WHERE company_id = ? AND job_id IN ${inJ(jobIds)} ORDER BY created_at`
+          `SELECT id, job_id, rev, source, drawing_no, approved_by, approved_at, sha256, pages, equipment, note, created_at FROM tm_drawings WHERE company_id = ? AND job_id IN (SELECT value FROM json_each(?)) ORDER BY created_at`
         )
-          .bind(u.company_id, ...jobIds)
+          .bind(u.company_id, JSON.stringify(jobIds))
           .all()
       : { results: [] },
     jobIds.length
       ? env.DB.prepare(
           `SELECT e.id, e.job_id, e.visit_id, e.vehicle_id, e.user_id, e.kind, e.data, e.client_time, e.server_time, x.name AS user_name FROM tm_events e JOIN users x ON x.id = e.user_id
-           WHERE e.company_id = ? AND (e.job_id IN ${inJ(jobIds)} OR e.user_id = ?) AND e.server_time > ? ORDER BY e.server_time DESC LIMIT 600`
+           WHERE e.company_id = ? AND (e.job_id IN (SELECT value FROM json_each(?)) OR e.user_id = ?) AND e.server_time > ? ORDER BY e.server_time DESC LIMIT 600`
         )
-          .bind(u.company_id, ...jobIds, u.id, now() - 30 * 864e5)
+          .bind(u.company_id, JSON.stringify(jobIds), u.id, now() - 30 * 864e5)
           .all()
       : env.DB.prepare(
           "SELECT e.id, e.job_id, e.visit_id, e.vehicle_id, e.user_id, e.kind, e.data, e.client_time, e.server_time, '' AS user_name FROM tm_events e WHERE e.company_id = ? AND e.user_id = ? AND e.server_time > ? ORDER BY e.server_time DESC LIMIT 200"
@@ -84,14 +91,16 @@ R.add('GET', '/sync', async (env, u) => {
           .all(),
     jobIds.length
       ? env.DB.prepare(
-          `SELECT id, job_id, visit_id, user_id, task_id, category, caption, taken_at, received_at, source FROM tm_photos WHERE company_id = ? AND job_id IN ${inJ(jobIds)} ORDER BY taken_at DESC LIMIT 400`
+          `SELECT id, job_id, visit_id, user_id, task_id, category, caption, taken_at, received_at, source FROM tm_photos WHERE company_id = ? AND job_id IN (SELECT value FROM json_each(?)) ORDER BY taken_at DESC LIMIT 400`
         )
-          .bind(u.company_id, ...jobIds)
+          .bind(u.company_id, JSON.stringify(jobIds))
           .all()
       : { results: [] },
     visits.length
-      ? env.DB.prepare(`SELECT * FROM tm_photo_tasks WHERE visit_id IN ${inJ(visits.map(v => v.id))} ORDER BY due_at`)
-          .bind(...visits.map(v => v.id))
+      ? env.DB.prepare(
+          `SELECT * FROM tm_photo_tasks WHERE visit_id IN (SELECT value FROM json_each(?)) ORDER BY due_at`
+        )
+          .bind(JSON.stringify(visits.map(v => v.id)))
           .all()
       : { results: [] },
     env.DB.prepare('SELECT id, reg, model, kind, off_road, unsafe FROM tm_vehicles WHERE company_id = ? ORDER BY reg')
@@ -189,6 +198,9 @@ R.add('GET', '/sync', async (env, u) => {
 R.add('POST', '/events', async (env, u, req) => {
   const b = await body(req, 3000000);
   if (!b || !Array.isArray(b.events) || b.events.length > 100) return bad('bad batch');
+  // a phone catching up after days without signal sends a few batches; far more than that is not a phone
+  if (await tooMany(env, 'crewev:' + u.id, 60, 10))
+    return bad('Too many records at once: the phone will try again.', 429);
   const done = [],
     failed = [];
   const offset = num(b.client_now) ? Math.round(b.client_now - now()) : null;
@@ -199,7 +211,15 @@ R.add('POST', '/events', async (env, u, req) => {
       continue;
     }
     const r = c.row;
-    if (r.job_id && !(await mayJob(env, u, r.job_id))) {
+    // records for a visit: only one of this person's own visits, and the job is the visit's job
+    if (r.visit_id) {
+      const v = await myVisit(env, u, r.visit_id);
+      if (!v || (r.job_id && r.job_id !== v.job_id)) {
+        failed.push({ id: r.id, error: 'This visit is not on your list any more.' });
+        continue;
+      }
+      r.job_id = v.job_id;
+    } else if (r.job_id && !(await mayJob(env, u, r.job_id))) {
       failed.push({ id: r.id, error: 'This job is not on your list any more.' });
       continue;
     }
@@ -213,7 +233,9 @@ R.add('POST', '/events', async (env, u, req) => {
       continue;
     }
     const ins = await insertEvent(env, r).run();
-    if (ins.meta && ins.meta.changes) await applyEvent(env, u, r);
+    // the record is kept even if acting on it fails, so one bad record never holds up the rest
+    if (ins.meta && ins.meta.changes)
+      await applyEvent(env, u, r).catch(err => console.error('event ' + r.kind + ' ' + r.id + ': ' + err.message));
     done.push(r.id);
   }
   await env.DB.prepare('UPDATE users SET last_seen = ? WHERE id = ?').bind(now(), u.id).run();
@@ -234,9 +256,30 @@ R.add('PUT', '/photo/:id', async (env, u, req, p) => {
   } catch (e) {
     return bad('bad details');
   }
-  const jobId = str(m.job_id, 64);
-  if (jobId && !(await mayJob(env, u, jobId))) return bad('This job is not on your list any more.', 403);
-  if (!jobId && !m.vehicle_id) return bad('photo of what?');
+  let jobId = str(m.job_id, 64);
+  const visitId = str(m.visit_id, 64),
+    vehicleId = str(m.vehicle_id, 64);
+  if (visitId) {
+    const v = await myVisit(env, u, visitId);
+    if (!v || (jobId && jobId !== v.job_id)) return bad('This visit is not on your list any more.', 403);
+    jobId = v.job_id;
+  } else if (jobId && !(await mayJob(env, u, jobId))) return bad('This job is not on your list any more.', 403);
+  if (
+    vehicleId &&
+    !(await env.DB.prepare('SELECT 1 FROM tm_vehicles WHERE id = ? AND company_id = ?')
+      .bind(vehicleId, u.company_id)
+      .first())
+  )
+    return bad('unknown vehicle');
+  if (!jobId && !vehicleId) return bad('photo of what?');
+  // the record a photo belongs to must be this person's own
+  const eventId =
+    m.event_id &&
+    (await env.DB.prepare('SELECT 1 FROM tm_events WHERE id = ? AND company_id = ? AND user_id = ?')
+      .bind(str(m.event_id, 64), u.company_id, u.id)
+      .first())
+      ? str(m.event_id, 64)
+      : null;
   const buf = await readBody(req, PHOTO_MAX);
   if (!buf) return bad('too large', 413);
   const mime = sniff(buf);
@@ -247,30 +290,30 @@ R.add('PUT', '/photo/:id', async (env, u, req, p) => {
   const sha = await sha256buf(buf);
   const key = `co/${u.company_id}/photos/${p.id}.${ext(mime)}`;
   await putOnce(env, key, buf, mime);
-  const taken = num(m.taken_at),
-    row = {
-      id: p.id,
-      company_id: u.company_id,
-      job_id: jobId,
-      visit_id: str(m.visit_id, 64),
-      vehicle_id: str(m.vehicle_id, 64),
-      event_id: str(m.event_id, 64),
-      user_id: u.id,
-      task_id: str(m.task_id, 140),
-      category: str(m.category, 40),
-      caption: str(m.caption, 300),
-      r2_key: key,
-      sha256: sha,
-      size: buf.length,
-      mime,
-      lat: num(m.lat),
-      lng: num(m.lng),
-      acc: num(m.acc),
-      taken_at: taken && taken > 1.5e12 && taken < now() + 864e5 ? Math.round(taken) : now(),
-      received_at: now(),
-      skew: num(m.client_now) ? Math.round(m.client_now - now()) : null,
-      source,
-    };
+  const skew = num(m.client_now) ? Math.round(m.client_now - now()) : null;
+  const row = {
+    id: p.id,
+    company_id: u.company_id,
+    job_id: jobId,
+    visit_id: visitId,
+    vehicle_id: vehicleId,
+    event_id: eventId,
+    user_id: u.id,
+    task_id: str(m.task_id, 140),
+    category: str(m.category, 40),
+    caption: str(m.caption, 300),
+    r2_key: key,
+    sha256: sha,
+    size: buf.length,
+    mime,
+    lat: num(m.lat),
+    lng: num(m.lng),
+    acc: num(m.acc),
+    taken_at: phoneTime(m.taken_at, skew) || now(),
+    received_at: now(),
+    skew,
+    source,
+  };
   await env.DB.prepare(
     'INSERT OR IGNORE INTO tm_photos (id, company_id, job_id, visit_id, vehicle_id, event_id, user_id, task_id, category, caption, r2_key, sha256, size, mime, lat, lng, acc, taken_at, received_at, skew, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   )
@@ -300,17 +343,13 @@ R.add('GET', '/logo', async (env, u) => {
   return serve(env, 'logos/' + u.company_id, u.logo_type);
 });
 
+// the phone makers' push services only: the server sends to this address, so nothing else is accepted
+const PUSH_HOSTS =
+  /^https:\/\/(fcm\.googleapis\.com|android\.googleapis\.com|[a-z0-9.-]+\.push\.apple\.com|updates\.push\.services\.mozilla\.com|[a-z0-9.-]+\.notify\.windows\.com)\//;
 R.add('POST', '/push', async (env, u, req) => {
   const b = await body(req, 5000);
   const s = b && b.subscription;
-  if (
-    !s ||
-    typeof s.endpoint !== 'string' ||
-    !/^https:\/\//.test(s.endpoint) ||
-    !s.keys ||
-    !s.keys.p256dh ||
-    !s.keys.auth
-  )
+  if (!s || typeof s.endpoint !== 'string' || !PUSH_HOSTS.test(s.endpoint) || !s.keys || !s.keys.p256dh || !s.keys.auth)
     return bad('bad subscription');
   if (s.endpoint.length > 1000) return bad('bad subscription');
   const id = await sha256(s.endpoint);
@@ -327,6 +366,10 @@ R.add('POST', '/push', async (env, u, req) => {
       now()
     ),
     env.DB.prepare('UPDATE users SET push_ok = 1 WHERE id = ?').bind(u.id),
+    // a person has a phone or two: keep their three newest
+    env.DB.prepare(
+      'DELETE FROM tm_push WHERE user_id = ? AND id NOT IN (SELECT id FROM tm_push WHERE user_id = ? ORDER BY created_at DESC LIMIT 3)'
+    ).bind(u.id, u.id),
   ]);
   return ok();
 });
@@ -369,18 +412,34 @@ export async function crewLogin(req, env, ipk) {
       .toLowerCase(),
     pw = String(b.password || '');
   if (!un || !pw) return bad('Enter your username and password.');
-  if ((await tooMany(env, 'crew:ip:' + ipk, 30, 15)) || (await tooMany(env, 'crew:u:' + un, 8, 15)))
-    return bad('Too many tries. Wait 15 minutes and try again.', 429);
+  // only wrong passwords count: 10 from one address for one username, 40 from one address, 50 for one username
+  // from anywhere (so a stranger can't lock a crew member out from one place)
+  const keys = [
+    ['crewf:' + ipk + ':' + un, 10],
+    ['crewf:' + ipk, 40],
+    ['crewf:u:' + un, 50],
+  ];
+  for (const [k, n] of keys)
+    if (
+      (
+        await env.DB.prepare('SELECT COUNT(*) AS c FROM attempts WHERE k = ? AND at > ?')
+          .bind(k, now() - 15 * 60e3)
+          .first()
+      ).c >= n
+    )
+      return bad('Too many wrong tries. Wait 15 minutes and try again.', 429);
   const usr = await env.DB.prepare(
     "SELECT u.*, c.closed_at FROM users u JOIN companies c ON c.id = u.company_id WHERE u.username = ? AND u.role IN ('lead','engineer')"
   )
     .bind(un)
     .first();
-  if (!usr || usr.disabled || usr.closed_at || !(await checkPassword(pw, usr.pass_hash)))
+  if (!usr || usr.disabled || usr.closed_at || !(await checkPassword(pw, usr.pass_hash))) {
+    await env.DB.batch(keys.map(([k]) => env.DB.prepare('INSERT INTO attempts (k, at) VALUES (?, ?)').bind(k, now())));
     return bad(
       "That username and password don't match. Ask your office to reset your password if you've forgotten it.",
       401
     );
+  }
   const ck = await startSession(env, usr.id);
   return new Response(JSON.stringify({ ok: true }), {
     headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Set-Cookie': ck },
@@ -392,10 +451,13 @@ export async function crewApi(req, env, u, url, M) {
   if (path === '/login' && M === 'POST') return crewLogin(req, env, ipKey(req.headers.get('CF-Connecting-IP') || ''));
   if (path === '/logout' && M === 'POST') {
     const t = (req.headers.get('Cookie') || '').match(new RegExp('(?:^|;\\s*)' + CK + '=([^;]+)'));
-    if (t)
-      await env.DB.prepare('DELETE FROM sessions WHERE id = ?')
-        .bind(await sha256(t[1]))
-        .run();
+    if (t) {
+      const sid = await sha256(t[1]);
+      // signing out stops this person's notifications reaching the phone (it may be shared)
+      const sess = await env.DB.prepare('SELECT user_id FROM sessions WHERE id = ?').bind(sid).first();
+      if (sess) await env.DB.prepare('DELETE FROM tm_push WHERE user_id = ?').bind(sess.user_id).run();
+      await env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(sid).run();
+    }
     return new Response('{"ok":true}', {
       headers: {
         'Content-Type': 'application/json',

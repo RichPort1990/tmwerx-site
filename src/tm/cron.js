@@ -2,7 +2,7 @@
 // services, qualifications and permits running out.
 import { now, sendEmail } from '../lib/core.js';
 import { pushTo } from './push.js';
-import { raiseAlert, settings } from './util.js';
+import { ukDate, raiseAlert, settings } from './util.js';
 
 const crewOf = async (env, visitId) =>
   (await env.DB.prepare('SELECT user_id FROM tm_assign WHERE visit_id = ?').bind(visitId).all()).results.map(
@@ -16,17 +16,19 @@ async function photoTasks(env) {
   // due now: remind the crew (level 0 -> 1)
   const due = (
     await env.DB.prepare(
-      "SELECT t.*, j.number FROM tm_photo_tasks t JOIN tm_jobs j ON j.id = t.job_id WHERE t.status = 'due' AND t.alert_level = 0 AND t.due_at <= ? LIMIT 200"
+      // at most 25 a minute for any one company, newest first, so one busy (or misused) account can't hold up the rest
+      "SELECT * FROM (SELECT t.*, j.number, ROW_NUMBER() OVER (PARTITION BY t.company_id ORDER BY t.due_at DESC) AS rn FROM tm_photo_tasks t JOIN tm_jobs j ON j.id = t.job_id WHERE t.status = 'due' AND t.alert_level = 0 AND t.due_at <= ?) WHERE rn <= 25 LIMIT 400"
     )
       .bind(t)
       .all()
   ).results;
   for (const k of due) {
     await env.DB.prepare('UPDATE tm_photo_tasks SET alert_level = 1 WHERE id = ?').bind(k.id).run();
+    if (k.due_at < t - 2 * 3600e3) continue; // found long after it was due: the office alert below covers it
     await pushTo(env, await crewOf(env, k.visit_id), {
       title: 'Photo due now',
       body: `${k.label}${k.count > 1 ? ' (' + k.count + ')' : ''} · ${k.number}`,
-      url: `/crew/#photos/${k.job_id}/${k.visit_id}`,
+      url: `/crew/#v/${k.visit_id}`,
       tag: 'task-' + k.id,
       urgent: true,
     });
@@ -34,7 +36,7 @@ async function photoTasks(env) {
   // past its grace time: tell the office (level 1 -> 2), then escalate (2 -> 3)
   const late = (
     await env.DB.prepare(
-      "SELECT t.*, j.number, j.address, r.escalate_mins FROM tm_photo_tasks t JOIN tm_jobs j ON j.id = t.job_id LEFT JOIN tm_photo_rules r ON r.id = t.rule_id WHERE t.status = 'due' AND t.alert_level < 3 AND t.grace_until < ? LIMIT 300"
+      "SELECT * FROM (SELECT t.*, j.number, j.address, r.escalate_mins, ROW_NUMBER() OVER (PARTITION BY t.company_id ORDER BY t.grace_until DESC) AS rn FROM tm_photo_tasks t JOIN tm_jobs j ON j.id = t.job_id LEFT JOIN tm_photo_rules r ON r.id = t.rule_id WHERE t.status = 'due' AND t.alert_level < 3 AND t.grace_until < ?) WHERE rn <= 25 LIMIT 400"
     )
       .bind(t)
       .all()
@@ -46,8 +48,8 @@ async function photoTasks(env) {
     const crew = await crewOf(env, k.visit_id);
     const seen = crew.length
       ? (
-          await env.DB.prepare(`SELECT MAX(last_seen) AS t FROM users WHERE id IN (${crew.map(() => '?').join(',')})`)
-            .bind(...crew)
+          await env.DB.prepare(`SELECT MAX(last_seen) AS t FROM users WHERE id IN (SELECT value FROM json_each(?))`)
+            .bind(JSON.stringify(crew))
             .first()
         ).t
       : null;
@@ -66,7 +68,7 @@ async function photoTasks(env) {
       await pushTo(env, crew, {
         title: 'Photo still overdue',
         body: `${k.label} · ${k.number}. Take it now, or say why it can't be done.`,
-        url: `/crew/#photos/${k.job_id}/${k.visit_id}`,
+        url: `/crew/#v/${k.visit_id}`,
         tag: 'task-' + k.id,
         urgent: true,
       });
@@ -102,7 +104,7 @@ async function loneWorking(env) {
       await pushTo(env, [l.user_id], {
         title: 'Check in now',
         body: 'Tap to confirm you are safe.',
-        url: '/crew/#checkin',
+        url: l.visit_id ? `/crew/#v/${l.visit_id}` : '/crew/',
         tag: 'checkin',
         urgent: true,
       });
@@ -163,9 +165,9 @@ async function outOfContact(env) {
 
 // once a day, about 06:00 UK time: things running out
 async function daily(env) {
-  const day = new Date().toISOString().slice(0, 10),
-    soon = new Date(now() + 14 * 864e5).toISOString().slice(0, 10),
-    month = new Date(now() + 30 * 864e5).toISOString().slice(0, 10);
+  const day = ukDate(),
+    soon = ukDate(now() + 14 * 864e5),
+    month = ukDate(now() + 30 * 864e5);
   const v = (await env.DB.prepare('SELECT * FROM tm_vehicles WHERE off_road = 0').all()).results;
   for (const x of v)
     for (const [k, label] of [
@@ -202,7 +204,7 @@ async function daily(env) {
     await env.DB.prepare(
       "SELECT j.* FROM tm_jobs j WHERE j.status IN ('scheduled','in_progress') AND j.permit_end IS NOT NULL AND j.permit_end <= ? AND EXISTS (SELECT 1 FROM tm_visits v WHERE v.job_id = j.id AND v.status IN ('scheduled','in_progress'))"
     )
-      .bind(new Date(now() + 2 * 864e5).toISOString().slice(0, 10))
+      .bind(ukDate(now() + 2 * 864e5))
       .all()
   ).results;
   for (const j of p)

@@ -3,7 +3,7 @@
 // working on paper: the same documents with empty sign-on and vehicle check sheets.
 import { esc } from '../pages.js';
 import { companyLine } from '../lib/core.js';
-import { pj } from './util.js';
+import { ukDate, pj } from './util.js';
 
 const fmt = t =>
   t
@@ -40,6 +40,8 @@ const KIND = {
   lone_start: 'Lone working started',
   lone_stop: 'Lone working ended',
 };
+// a list from a phone record: only its objects (a malformed record must never break the pack)
+const L = x => (Array.isArray(x) ? x.filter(i => i && typeof i === 'object') : []);
 function describe(e) {
   const d = e.data || {};
   switch (e.kind) {
@@ -50,15 +52,16 @@ function describe(e) {
     case 'loaded':
     case 'returned':
       return (
-        (d.items || []).map(i => `${esc(i.name)} ${esc(i.qty)}${i.left_on_site ? ' (left on site)' : ''}`).join(', ') +
-        (d.notes ? ` · ${esc(d.notes)}` : '')
+        L(d.items)
+          .map(i => `${esc(i.name)} ${esc(i.qty)}${i.left_on_site ? ' (left on site)' : ''}`)
+          .join(', ') + (d.notes ? ` · ${esc(d.notes)}` : '')
       );
     case 'day_complete':
     case 'job_complete':
       return `${d.finished === false ? 'Back another day' : e.kind === 'job_complete' ? 'Whole job finished' : 'Day complete'} · Site left clear and safe: ${d.site_clear === false ? '<b class="bad">No</b>' : 'Yes'}${d.notes ? ` · ${esc(d.notes)}` : ''}`;
     case 'vehicle_check':
-      return `${d.safe === false ? '<b class="bad">NOT SAFE</b>' : 'Safe to use'}${d.mileage ? ` · ${esc(d.mileage)} miles` : ''}${(
-        d.items || []
+      return `${d.safe === false ? '<b class="bad">NOT SAFE</b>' : 'Safe to use'}${d.mileage ? ` · ${esc(d.mileage)} miles` : ''}${L(
+        d.items
       )
         .filter(i => i.result === 'defect')
         .map(i => ` · Defect: ${esc(i.item)}${i.note ? ' (' + esc(i.note) + ')' : ''}`)
@@ -84,6 +87,7 @@ img.sig{height:48px;max-width:200px}.box{height:24px}.page{break-before:page}.ba
 @media print{.bar{display:none}main{padding:0}h2{break-after:avoid}tr{break-inside:avoid}}`;
 
 export async function evidencePack(env, u, j, { blank = false, base = '/api/office', title = null }) {
+  const nonce = crypto.randomUUID().replace(/-/g, '');
   const cid = j.company_id;
   const [visits, assign, drawings, events, photos, tasks, docs, client, co, log, vehicles] = await Promise.all([
     env.DB.prepare(
@@ -135,15 +139,13 @@ export async function evidencePack(env, u, j, { blank = false, base = '/api/offi
   const checks = vehIds.length
     ? (
         await env.DB.prepare(
-          `SELECT e.*, x.name AS user_name FROM tm_events e JOIN users x ON x.id = e.user_id WHERE e.company_id = ? AND e.kind = 'vehicle_check' AND e.vehicle_id IN (${vehIds.map(() => '?').join(',')})`
+          `SELECT e.*, x.name AS user_name FROM tm_events e JOIN users x ON x.id = e.user_id WHERE e.company_id = ? AND e.kind = 'vehicle_check' AND e.vehicle_id IN (SELECT value FROM json_each(?))`
         )
-          .bind(cid, ...vehIds)
+          .bind(cid, JSON.stringify(vehIds))
           .all()
       ).results
         .map(e => Object.assign(e, { data: pj(e.data, {}) }))
-        .filter(e =>
-          visits.results.some(v => new Date(e.client_time || e.server_time).toISOString().slice(0, 10) === v.date)
-        )
+        .filter(e => visits.results.some(v => ukDate(e.client_time || e.server_time) === v.date))
     : [];
   const crewOf = v => assign.results.filter(a => a.visit_id === v.id);
   const latestDrawing = drawings.results[drawings.results.length - 1];
@@ -154,7 +156,7 @@ export async function evidencePack(env, u, j, { blank = false, base = '/api/offi
     vc = D.vehicle_checks ? D.vehicle_checks.content : { items: [] };
   const signs = ev.filter(e => e.kind === 'ra_signoff');
   let h = `<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title || (blank ? 'Pre-start pack' : 'Job pack'))} ${esc(j.number)}</title><style>${CSS}</style></head><body>
-<div class="bar"><button onclick="print()">Print or save as PDF</button><span>${esc(j.number)} · ${blank ? 'pre-start pack' : 'job pack'}</span></div><main>
+<div class="bar"><button id="printBtn">Print or save as PDF</button><span>${esc(j.number)} · ${blank ? 'pre-start pack' : 'job pack'}</span></div><main>
 <div class="top"><div><h1>${blank ? 'Pre-start pack' : 'Job pack'}: ${esc(j.number)}</h1><div>${esc(co.name)}${client ? ' for ' + esc(client.name) : ''}</div><div class="muted">Produced ${fmt(Date.now())}</div></div>${co.logo_type ? `<img src="${base}/logo" alt="">` : ''}</div>
 ${draft ? '<div class="draft">DRAFT DOCUMENTS: the risk assessment, method statement or checklists have not been approved by the office yet.</div>' : ''}
 <h2>1. Job</h2><table>${row('Site', esc([j.address, j.town, j.postcode].filter(Boolean).join(', ')))}${row('Title', esc(j.title))}${row('Client reference', esc(j.client_ref))}${row('Traffic management', esc(j.tm_type))}
@@ -206,7 +208,14 @@ ${
       : checks
           .map(
             e =>
-              `<h3>${esc((vehOf(e.vehicle_id) || {}).reg || '')}: ${fmt(e.client_time || e.server_time)}, ${esc(e.user_name)}</h3><p>${describe(e)}</p><table class="grid"><tr><th>Check</th><th>Result</th><th>Notes</th></tr>${(e.data.items || []).map(i => `<tr><td>${esc(i.item)}</td><td class="${i.result === 'defect' ? 'bad' : ''}">${esc({ ok: 'OK', defect: 'DEFECT', na: 'N/A' }[i.result] || '')}</td><td>${esc(i.note || '')}</td></tr>`).join('')}</table>${sig(e)}`
+              `<h3>${esc((vehOf(e.vehicle_id) || {}).reg || '')}: ${fmt(e.client_time || e.server_time)}, ${esc(e.user_name)}</h3><p>${describe(e)}</p><table class="grid"><tr><th>Check</th><th>Result</th><th>Notes</th></tr>${L(
+                e.data.items
+              )
+                .map(
+                  i =>
+                    `<tr><td>${esc(i.item)}</td><td class="${i.result === 'defect' ? 'bad' : ''}">${esc({ ok: 'OK', defect: 'DEFECT', na: 'N/A' }[i.result] || '')}</td><td>${esc(i.note || '')}</td></tr>`
+                )
+                .join('')}</table>${sig(e)}`
           )
           .join('') || '<p class="muted">No vehicle checks recorded for these dates.</p>'
   }`;
@@ -233,13 +242,13 @@ ${
 <h2 class="page">11. Photos</h2><div class="photos">${photos.results.map(p => `<figure><img src="${base}/file/photo/${esc(p.id)}" loading="lazy" alt=""><figcaption><b>${esc(p.category || '')}</b> ${esc(p.caption || '')}<br>${esc(p.user_name)}${p.source !== 'camera' ? ` (${esc(p.source)})` : ''} · taken ${fmt(p.taken_at)}${p.received_at - p.taken_at > 600e3 ? `, arrived ${fmt(p.received_at)}` : ''}${p.lat != null ? `<br>${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}` : ''}<br><span class="muted" style="font-size:9px">${esc(p.sha256.slice(0, 24))}…</span></figcaption></figure>`).join('') || '<p class="muted">No photos.</p>'}</div>
 <h2>12. Office record of changes</h2><table class="grid"><tr><th>When</th><th>Who</th><th>What</th></tr>${log.results.map(l => `<tr><td>${fmt(l.at)}</td><td>${esc(l.name || '')}</td><td>${esc(l.action)}${l.detail ? ': ' + esc(l.detail) : ''}</td></tr>`).join('')}</table>`;
   }
-  h += `<p class="muted" style="margin-top:30px">${esc(companyLine(env))} TM WerX keeps every record as it was sent; corrections are added as new records.</p></main></body></html>`;
+  h += `<p class="muted" style="margin-top:30px">${esc(companyLine(env))} TM WerX keeps every record as it was sent; corrections are added as new records.</p></main><script nonce="${nonce}">document.getElementById('printBtn').onclick = () => print();</script></body></html>`;
   return new Response(h, {
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-store',
       'Content-Security-Policy':
-        "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'self'",
+        "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; frame-ancestors 'self'",
       'X-Content-Type-Options': 'nosniff',
     },
   });

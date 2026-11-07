@@ -53,7 +53,7 @@ const TMDB = (() => {
         try {
           // only what the person signed in now made: the server files everything under the session's login
           const owner = await api.get('kv', 'owner');
-          if (!owner) return Object.assign(out, { signedOut: true });
+          if (!owner) return out; // nobody has signed in on this phone yet: nothing of theirs to send
           let ev = (await api.all('outbox'))
             .filter(e => !e.error && e.user_id === owner)
             .sort((a, b) => a.client_time - b.client_time);

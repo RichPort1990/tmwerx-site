@@ -226,6 +226,8 @@ function drawSendbar() {
   const n = $('#net');
   n.textContent = navigator.onLine ? '' : 'No signal';
   n.className = 'net' + (navigator.onLine ? '' : ' off');
+  // on the sign-in screen itself the bar would only repeat it
+  if (S.signedOut && !S.data && !ev.length && !ph.length) return (b.hidden = true);
   if (S.signedOut) {
     b.hidden = false;
     b.className = 'sendbar bad';
@@ -246,7 +248,7 @@ async function flushNow(loud) {
   if (!navigator.onLine)
     return loud && toast('No signal. Everything is saved on the phone and will send when you have signal.');
   const r = await TMDB.flush();
-  S.signedOut = r.signedOut;
+  if (r.signedOut) S.signedOut = true; // only the server saying so; a good sync clears it
   await refreshLocal();
   if (loud)
     toast(
@@ -287,28 +289,32 @@ async function record(kind, v, o = {}) {
   kick();
   return e;
 }
+// each sync is numbered: an answer that comes back after a newer sync started (say, the check made as the app
+// opened, arriving after the person has signed in) is out of date and ignored
+let syncGen = 0;
 async function sync(quiet) {
   if (!navigator.onLine) return;
+  const gen = ++syncGen;
   try {
     await TMDB.flush();
     const r = await fetch('/api/crew/sync', { credentials: 'same-origin' });
+    if (gen !== syncGen) return;
     if (r.status === 401) {
+      // signed out (password reset, signed in on another phone, or the session ran out): this person's jobs,
+      // drawings and photos come off the phone. Anything not yet sent stays, and sends when they sign in again.
+      if (S.data) await forgetPerson();
       S.signedOut = true;
       await refreshLocal();
-      if (!S.data) drawLogin();
+      if (!$('#un')) drawLogin(); // already showing: don't wipe what they are typing
       return;
     }
     if (!r.ok) return;
     const j = await r.json();
+    if (gen !== syncGen) return;
     const owner = await TMDB.get('kv', 'owner');
     if (owner && owner !== j.me.id) {
-      // a different person signed in on this phone: the last person's unsent work stays theirs
-      for (const e of await TMDB.all('outbox'))
-        if (e.user_id === owner)
-          await TMDB.put(
-            'outbox',
-            Object.assign(e, { error: 'Made by another login on this phone. It will send when they sign in.' })
-          );
+      // a different person signed in on this phone: the last person's unsent work stays on the phone, theirs, and
+      // sends when they next sign in here (records only ever send for the person signed in)
       S.seen = {};
       await TMDB.put('kv', {}, 'seen');
     }
@@ -337,6 +343,15 @@ function prefetchFiles() {
   for (const id of ids) fetch('/api/crew/file/drawing/' + id, { credentials: 'same-origin' }).catch(() => {});
   for (const p of S.data.photos.filter(p => p.source === 'office' && jobs.has(p.job_id)))
     fetch('/api/crew/file/photo/' + p.id, { credentials: 'same-origin' }).catch(() => {});
+}
+
+// a shared phone: the next person must not see this person's jobs, or open their drawings and photos offline
+async function forgetPerson() {
+  await TMDB.del('kv', 'sync');
+  await TMDB.put('kv', {}, 'seen');
+  if (window.caches) await caches.delete('tmwerx-files-v1').catch(() => {});
+  S.seen = {};
+  S.data = null;
 }
 
 /* ---------- photos: camera, shrink, save on the phone ---------- */
@@ -1159,8 +1174,7 @@ ${bad.length ? `<h3>Could not be sent</h3>${bad.map(b => `<div class="vc"><b>${e
     )
       return;
     await fetch('/api/crew/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
-    await TMDB.del('kv', 'sync');
-    S.data = null;
+    await forgetPerson();
     S.signedOut = false;
     stopLocation();
     drawLogin();

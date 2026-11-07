@@ -75,7 +75,19 @@ export async function onEventTasks(env, job, visit, kind, at) {
   if (!visit || (!trig && !['started', 'failed_visit'].includes(kind))) return;
   const all = await rulesFor(env, job);
   // work has started: the timed photos for the shift are set out now, so the phone knows them even without signal
-  if (kind === 'started') {
+  // only the first start of a visit sets them out (a second Start, or a replayed one, adds nothing)
+  const timed = all
+    .filter(r => (r.trig === 'repeat' && r.every_mins >= 15) || (r.trig === 'daily' && r.at_time))
+    .map(r => r.id);
+  const already =
+    kind === 'started' &&
+    timed.length &&
+    (await env.DB.prepare(
+      'SELECT 1 FROM tm_photo_tasks WHERE visit_id = ? AND rule_id IN (SELECT value FROM json_each(?)) LIMIT 1'
+    )
+      .bind(visit.id, JSON.stringify(timed))
+      .first());
+  if (kind === 'started' && !already) {
     const q = [];
     for (const r of all.filter(r => r.trig === 'repeat' && r.every_mins >= 15))
       for (let t = at + r.every_mins * 60e3; t <= at + 16 * 3600e3; t += r.every_mins * 60e3)
@@ -106,27 +118,34 @@ export async function onEventTasks(env, job, visit, kind, at) {
 // a photo has arrived: does it settle a task? (taken in time = on time, even if it arrived later)
 export async function matchPhoto(env, photo) {
   if (!photo.task_id) return;
-  let t = await env.DB.prepare('SELECT * FROM tm_photo_tasks WHERE id = ? AND company_id = ?')
-    .bind(photo.task_id, photo.company_id)
+  // only a task of the photo's own visit (the visit was checked as the sender's when the photo arrived)
+  if (!photo.visit_id) return;
+  let t = await env.DB.prepare('SELECT * FROM tm_photo_tasks WHERE id = ? AND company_id = ? AND visit_id = ?')
+    .bind(photo.task_id, photo.company_id, photo.visit_id)
     .first();
   // the phone worked the time out from a different crew member's record than the server did (two people signed
   // in, say): the same visit and rule within half an hour is the same photo
   const m = !t && /^([\w-]{1,64}):([\w-]{1,64}):(\d{13})$/.exec(photo.task_id);
-  if (m)
+  if (m && m[1] === photo.visit_id)
     t = await env.DB.prepare(
       'SELECT * FROM tm_photo_tasks WHERE company_id = ? AND visit_id = ? AND rule_id = ? AND ABS(due_at - ?) < 1800000 ORDER BY ABS(due_at - ?) LIMIT 1'
     )
       .bind(photo.company_id, m[1], m[2], +m[3], +m[3])
       .first();
   if (t && t.id !== photo.task_id)
-    await env.DB.prepare('UPDATE tm_photos SET task_id = ? WHERE id = ?').bind(t.id, photo.id).run();
+    await env.DB.prepare('UPDATE tm_photos SET task_id = ? WHERE id = ? AND company_id = ?')
+      .bind(t.id, photo.id, photo.company_id)
+      .run();
   // done already, or missed: past the company's limit for photos sent late (a late photo never replaces a missed one)
   if (!t || t.status !== 'due') return;
-  const n = (
-    await env.DB.prepare('SELECT COUNT(*) AS n FROM tm_photos WHERE task_id = ? AND taken_at <= ?')
-      .bind(t.id, t.grace_until)
-      .first()
-  ).n;
+  const n = // taken from a quarter of an hour before it was due up to the end of its allowance
+    (
+      await env.DB.prepare(
+        'SELECT COUNT(*) AS n FROM tm_photos WHERE task_id = ? AND company_id = ? AND taken_at BETWEEN ? AND ?'
+      )
+        .bind(t.id, t.company_id, t.due_at - 900000, t.grace_until)
+        .first()
+    ).n;
   if (n < t.count) return;
   const late = photo.received_at > t.grace_until ? 1 : 0;
   await env.DB.prepare(

@@ -1,7 +1,7 @@
 // Job requests: emails forwarded to jobs+<key>@tmwerx.co.uk (Cloudflare Email Routing sends them to this Worker),
 // or messages pasted in the office app. Details are pulled out by simple rules for the office to check; nothing
 // becomes a job until someone approves it.
-import { now, sha256 } from '../lib/core.js';
+import { ACTIVE, now, sha256, tooMany } from '../lib/core.js';
 import { TM_TYPES } from './starter.js';
 import { uid } from './util.js';
 
@@ -207,6 +207,15 @@ export async function emailIntake(message, env) {
     .first();
   if (!co || co.closed_at) {
     message.setReject('Unknown address');
+    return;
+  }
+  if (!ACTIVE.has(co.sub_status)) {
+    message.setReject('This TM WerX account is not active.');
+    return;
+  }
+  // 200 requests an hour for a company: plenty for real work, and a leaked address can't fill the database
+  if (await tooMany(env, 'intake:' + co.company_id, 200, 60)) {
+    message.setReject('Too many job requests to this address just now. Try again later.');
     return;
   }
   if ((message.rawSize || 0) > 5 * 1024 * 1024) {

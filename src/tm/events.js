@@ -1,23 +1,52 @@
 // Records from site: saved exactly as sent (append only), then what they mean for the job, visit, van and office.
-import { now, sendEmail } from '../lib/core.js';
+import { now, sendEmail, tooMany } from '../lib/core.js';
 import { EVENT_KINDS } from './starter.js';
 import { onEventTasks } from './tasks.js';
 import { metres, num, pj, raiseAlert, settings, str, uid } from './util.js';
 
 const SIG_MAX = 300000;
+// a time from the phone, on our clock: corrected by the phone's clock error when that is more than 2 minutes, and
+// believed only between a week ago (records kept on a phone with no signal) and now
+export function phoneTime(t, skew) {
+  t = num(t);
+  if (!t) return null;
+  if (skew && Math.abs(skew) > 120000) t -= skew;
+  const n = now();
+  return t > n - 7 * 864e5 && t < n + 300000 ? Math.round(Math.min(t, n)) : null;
+}
+// the shapes the office and the job pack rely on: lists are lists of plain objects, everything else plain values
+const LISTS = ['items', 'mandatory'];
+function cleanData(d) {
+  const o = {};
+  for (const [k, v] of Object.entries(d).slice(0, 40)) {
+    if (LISTS.includes(k))
+      o[k] = (Array.isArray(v) ? v : [])
+        .filter(x => x && typeof x === 'object' && !Array.isArray(x))
+        .slice(0, 300)
+        .map(x =>
+          Object.fromEntries(
+            Object.entries(x)
+              .slice(0, 12)
+              .map(([a, b]) => [a, typeof b === 'object' ? null : b])
+          )
+        );
+    else if (v == null || ['string', 'number', 'boolean'].includes(typeof v))
+      o[k] = typeof v === 'string' ? v.slice(0, 4000) : v;
+  }
+  return o;
+}
 // check one record from the phone; returns the row to insert, or an error
 export function cleanEvent(e, u, offset = null) {
   if (!e || typeof e !== 'object') return { error: 'bad record' };
   const id = String(e.id || '');
   if (!/^[0-9a-f-]{36}$/i.test(id)) return { error: 'bad id' };
   if (!EVENT_KINDS.has(e.kind) || e.kind === 'location') return { error: 'unknown kind' };
-  const data = e.data && typeof e.data === 'object' ? e.data : {};
+  const data = cleanData(e.data && typeof e.data === 'object' && !Array.isArray(e.data) ? e.data : {});
   const dataStr = JSON.stringify(data);
   if (dataStr.length > 20000) return { error: 'record too large' };
   const sig = e.signature == null ? null : String(e.signature);
   if (sig && (sig.length > SIG_MAX || !/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(sig)))
     return { error: 'bad signature' };
-  const ct = num(e.client_time);
   return {
     row: {
       id,
@@ -32,7 +61,7 @@ export function cleanEvent(e, u, offset = null) {
       lat: num(e.lat),
       lng: num(e.lng),
       acc: num(e.acc),
-      client_time: ct && ct > 1.5e12 && ct < now() + 864e5 * 2 ? Math.round(ct) : null,
+      client_time: phoneTime(e.client_time, offset),
       server_time: now(),
       skew: offset, // the phone's clock minus ours when the batch was sent (a wrong clock shows here)
     },
@@ -70,7 +99,10 @@ const forward = (env, table, id, cid, to) =>
       .join(',')})`
   ).bind(to, now(), id, cid);
 
-async function emailAdmins(env, cid, subject, text) {
+// urgent emails to the office. The alert itself is always raised; the emails are capped (3 in 10 minutes from one
+// person, 30 an hour for a company) so a stuck or misused phone can't flood inboxes or use up the sending quota
+async function emailAdmins(env, cid, uid, subject, text) {
+  if ((await tooMany(env, 'alertmail:' + uid, 3, 10)) || (await tooMany(env, 'alertmailco:' + cid, 30, 60))) return;
   const rows = (
     await env.DB.prepare(
       "SELECT email FROM users WHERE company_id = ? AND role IN ('admin','office') AND disabled = 0 AND email IS NOT NULL"
@@ -150,6 +182,7 @@ export async function applyEvent(env, u, r) {
           await emailAdmins(
             env,
             cid,
+            u.id,
             `TM WerX: ${v.reg} reported not safe`,
             `${who} has reported ${v.reg} as NOT safe to use.\n\nDefects: ${defects.map(i => i.item).join(', ') || 'see the check'}\n\nIt cannot be put on a job until it is cleared in the office app (Vehicles).`
           );
@@ -169,9 +202,9 @@ export async function applyEvent(env, u, r) {
     case 'returned': {
       // compare what came back with what went out on this visit
       const out = await env.DB.prepare(
-        "SELECT data FROM tm_events WHERE visit_id = ? AND kind = 'loaded' ORDER BY server_time DESC LIMIT 1"
+        "SELECT data FROM tm_events WHERE company_id = ? AND visit_id = ? AND kind = 'loaded' ORDER BY server_time DESC LIMIT 1"
       )
-        .bind(r.visit_id || '')
+        .bind(cid, r.visit_id || '')
         .first();
       const loaded = new Map((pj(out && out.data, {}).items || []).map(i => [i.code || i.name, i]));
       const short = (d.items || [])
@@ -262,6 +295,7 @@ export async function applyEvent(env, u, r) {
       await emailAdmins(
         env,
         cid,
+        u.id,
         `URGENT: panic alarm from ${who}`,
         `${who} raised a panic alarm at ${new Date(at).toLocaleString('en-GB', { timeZone: 'Europe/London' })}.\n\n${where}\nPosition: ${r.lat != null ? `https://www.google.com/maps?q=${r.lat},${r.lng}` : 'not known'}\nPhone: ${u.phone || 'not on file'}\n\nCall them now. If you cannot reach them, call 999.`
       );

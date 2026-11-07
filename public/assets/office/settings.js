@@ -27,9 +27,20 @@ SCREENS.settings = async v => {
 <div class="card"><h2>Working time and records</h2><div class="row">${n('day_hours_limit', 'Day limit (hours)', '')}${n('week_hours_limit', 'Week limit (hours)', '')}<div><label>Week starts</label><select id="week_start" ${admin ? '' : 'disabled'}>${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((d, i) => `<option value="${i}" ${+s.week_start === i ? 'selected' : ''}>${d}</option>`).join('')}</select></div>${n('retention_years', 'Keep job records (years)', 'Completed jobs older than this are deleted, with their photos.')}</div></div>
 <div class="card"><h2>CAD WerX</h2><p class="muted">Link your CAD WerX account to pick saved, issued drawings straight onto jobs, with their equipment lists. Get the link code from CAD WerX (Account, TM WerX link).</p><label>Link code</label><input type="text" id="cadwerx_link" value="${esc(s.cadwerx_link || '')}" ${admin ? '' : 'disabled'}>${B.boot.cadwerx ? '' : '<p class="muted">The CAD WerX connection is not switched on for this site yet.</p>'}</div>
 ${admin ? '<div class="card"><button id="save">Save settings</button></div>' : ''}
-<div class="card"><h2>Job requests by email</h2><p>Forward job emails to <b class="mono">${esc(B.boot.intake_address || '')}</b>. They appear under Job requests for you to check. Keep this address private.</p></div>
-<div class="card"><h2>Your data</h2><p>Download everything in your account (jobs, records, people, documents) as one file. Photos and drawings download per job as a zip.</p><a class="btn sec" href="/api/office/export">Download export</a></div>`;
+<div class="card"><h2>Job requests by email</h2><p>Forward job emails to <b class="mono">${esc(B.boot.intake_address || '')}</b>. They appear under Job requests for you to check. Keep this address private.</p>${admin ? '<button class="sec" id="newKey">Give us a new address</button> <span class="muted">The old one stops working straight away.</span>' : ''}</div>
+${admin ? '<div class="card"><h2>Your data</h2><p>Download everything in your account (jobs, records, people, documents) as one file. Photos and drawings download per job as a zip.</p><a class="btn sec" href="/api/office/export">Download export</a></div>' : ''}`;
   if (!admin) return;
+  $('#newKey').onclick = async () => {
+    if (
+      !(await confirmBox(
+        'Make a new job request address? Emails to the old one will be refused, so tell your clients the new one.',
+        'Make new address'
+      ))
+    )
+      return;
+    const r = await guard(() => api('POST', '/settings/intake-key'), 'New address made');
+    if (r) (B.boot.intake_address = r.intake_address), route();
+  };
   $('#save').onclick = async () => {
     const b = {
       start_requires: $$('.sr:checked').map(i => i.value),

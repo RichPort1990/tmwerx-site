@@ -80,8 +80,8 @@ export async function encryptPayload(sub, text) {
 export async function pushTo(env, userIds, msg) {
   if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY || !userIds.length) return 0;
   const subs = (
-    await env.DB.prepare(`SELECT * FROM tm_push WHERE user_id IN (${userIds.map(() => '?').join(',')})`)
-      .bind(...userIds)
+    await env.DB.prepare(`SELECT * FROM tm_push WHERE user_id IN (SELECT value FROM json_each(?))`)
+      .bind(JSON.stringify(userIds))
       .all()
   ).results;
   let sent = 0;
@@ -104,8 +104,15 @@ export async function pushTo(env, userIds, msg) {
         if (r.status === 404 || r.status === 410)
           await env.DB.prepare('DELETE FROM tm_push WHERE id = ?').bind(s.id).run();
         else if (!r.ok)
-          await env.DB.prepare('UPDATE tm_push SET failures = failures + 1 WHERE id = ?').bind(s.id).run();
-        else sent++;
+          // a phone that keeps refusing (uninstalled, or its subscription broken): stop after 10 tries
+          await env.DB.batch([
+            env.DB.prepare('UPDATE tm_push SET failures = failures + 1 WHERE id = ?').bind(s.id),
+            env.DB.prepare('DELETE FROM tm_push WHERE id = ? AND failures >= 10').bind(s.id),
+          ]);
+        else {
+          sent++;
+          if (s.failures) await env.DB.prepare('UPDATE tm_push SET failures = 0 WHERE id = ?').bind(s.id).run();
+        }
       } catch (e) {
         console.error('push: ' + e.message);
       }

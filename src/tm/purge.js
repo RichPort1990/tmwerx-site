@@ -56,12 +56,18 @@ export async function tmRetention(env) {
   const cos = (await env.DB.prepare('SELECT company_id FROM tm_settings').all()).results;
   for (const c of cos) {
     const s = await settings(env, c.company_id);
-    const cut = new Date(now() - Math.max(1, s.retention_years) * 365.25 * DAY).toISOString().slice(0, 10);
+    const cutMs = now() - Math.max(1, s.retention_years) * 365.25 * DAY;
+    const cut = new Date(cutMs).toISOString().slice(0, 10);
     const old = (
       await env.DB.prepare(
-        "SELECT id FROM tm_jobs WHERE company_id = ? AND status IN ('completed','cancelled') AND COALESCE(end_date, start_date, '0000') < ? LIMIT 100"
+        // judged by what actually happened (the last visit and the last record from site or the office), not by the
+        // job's dates, which anyone in the office can change
+        `SELECT j.id FROM tm_jobs j WHERE j.company_id = ? AND j.status IN ('completed','cancelled') AND j.updated_at < ?
+           AND COALESCE((SELECT MAX(v.date) FROM tm_visits v WHERE v.job_id = j.id), j.end_date, j.start_date, '0000') < ?
+           AND NOT EXISTS (SELECT 1 FROM tm_events e WHERE e.job_id = j.id AND e.server_time >= ?)
+           AND NOT EXISTS (SELECT 1 FROM tm_photos p WHERE p.job_id = j.id AND p.received_at >= ?) LIMIT 100`
       )
-        .bind(c.company_id, cut)
+        .bind(c.company_id, cutMs, cut, cutMs, cutMs)
         .all()
     ).results;
     for (const j of old) {

@@ -128,7 +128,7 @@ with sync_playwright() as p:
     cl = api('POST', '/clients', {'name': 'Northern Gas', 'deduction_per_day': 2500})
     van = api('POST', '/vehicles', {'reg': 'yx70 abc', 'model': 'Transit', 'mot_due': time.strftime('%Y-%m-%d', time.gmtime(time.time() + 10 * 86400))})
     lead = api('POST', '/people', {'name': 'Sam Lead', 'username': f'sam{RUN}', 'role': 'lead', 'phone': '07700900123', 'day_cost': 18000})
-    check('crew login made with a username and a word password', lead.get('ok') and re.match(r'^[a-z]+-[a-z]+-\d{3}$', lead.get('password', '')), lead)
+    check('crew login made with a username and a word password', lead.get('ok') and re.match(r'^[a-z]+-[a-z]+-[a-z]+-\d{3}$', lead.get('password', '')), lead)
     dup = api('POST', '/people', {'name': 'Other', 'username': f'sam{RUN}'})
     check('usernames are unique', not dup.get('ok') and 'taken' in dup.get('error', ''))
     api('POST', f"/people/{lead['id']}/quals", {'name': 'NHSS 12D T2', 'number': 'A1', 'expires': '2020-01-01'})
@@ -354,6 +354,42 @@ with sync_playwright() as p:
     check('cron runs', cron() == 200 and cron('17+3+*+*+SUN') == 200)
     dl = api('GET', '/alerts')['alerts']
     check('daily check: expired qualification flagged', any(a['kind'] in ('qual_expired', 'qual_expiring') or 'NHSS' in a['title'] for a in dl), [a['title'] for a in dl])
+
+    # ---------- attacks from a crew phone (red team) ----------
+    import uuid
+    other = api('POST', '/people', {'name': 'Pat Other', 'username': f'pat{RUN}', 'role': 'engineer'})
+    octx = b.new_context()
+    for i in range(3):
+        octx.request.post(BASE + '/api/crew/login', data=json.dumps({'username': f'pat{RUN}', 'password': 'wrong'}), headers={'Content-Type': 'application/json'})
+    r = octx.request.post(BASE + '/api/crew/login', data=json.dumps({'username': f'pat{RUN}', 'password': other['password']}), headers={'Content-Type': 'application/json'})
+    check('a few wrong passwords do not lock the crew member out', r.ok, r.status)
+    def ev(kind, **kw):
+        e = {'id': str(uuid.uuid4()), 'kind': kind, 'client_time': int(time.time() * 1000), 'data': {}}
+        e.update(kw)
+        return octx.request.post(BASE + '/api/crew/events', data=json.dumps({'events': [e], 'client_now': int(time.time() * 1000)}), headers={'Content-Type': 'application/json'}).json()
+    x = ev('job_complete', visit_id=vid)
+    check('crew cannot write records to a visit they are not on', not x['done'] and x['failed'], x)
+    x = ev('started', visit_id=vid, job_id=None)
+    check('even without naming the job', not x['done'], x)
+    ph2 = octx.request.put(f"{BASE}/api/crew/photo/{uuid.uuid4()}", data=open(jpeg('sneaky'), 'rb').read(), headers={'Content-Type': 'image/jpeg', 'X-Photo': urllib.parse.quote(json.dumps({'visit_id': vid, 'task_id': J['tasks'][0]['id']}))})
+    check("crew cannot send photos into someone else's visit", ph2.status == 403, ph2.status)
+    ph3 = octx.request.put(f"{BASE}/api/crew/photo/{uuid.uuid4()}", data=open(jpeg('sneaky2'), 'rb').read(), headers={'Content-Type': 'image/jpeg', 'X-Photo': urllib.parse.quote(json.dumps({'vehicle_id': 'not-a-van', 'task_id': J['tasks'][0]['id']}))})
+    check('a photo naming a made-up van is refused', ph3.status == 400, ph3.status)
+    sub = octx.request.post(BASE + '/api/crew/push', data=json.dumps({'subscription': {'endpoint': 'https://evil.example.com/hook', 'keys': {'p256dh': 'x', 'auth': 'y'}}}), headers={'Content-Type': 'application/json'})
+    check('push addresses must be a real push service (no server-side requests elsewhere)', sub.status == 400, sub.status)
+    future = int(time.time() * 1000) + 36 * 3600e3
+    ev('lone_start', client_time=future, data={'every_mins': 30})
+    lone = [l for l in api('GET', '/safety')['lone'] if l['user_id'] == other['id']]
+    check('a phone clock set ahead cannot push lone-working check-ins into the future', lone and lone[0]['next_due'] < time.time() * 1000 + 31 * 60e3, lone)
+    bad = ev('note', data={'items': 'x', 'nested': {'a': 1}, 'text': 'hi'})
+    check('malformed record data is cleaned, not stored as sent', bad['done'], bad)
+    check('the evidence pack still renders', pg.request.get(f'{BASE}/api/office/jobs/{jid}/pack').status == 200)
+    octx.close()
+    zr = api('POST', f'/jobs/{jid}/drawing?rev=../../evil', raw=PDF)
+    z2 = zipfile.ZipFile(io.BytesIO(pg.request.get(f'{BASE}/api/office/jobs/{jid}/zip').body()))
+    check('drawing revision names cannot escape the zip folder', zr.get('ok') and not any('../' in n or n.startswith('/') for n in z2.namelist()), z2.namelist())
+    csp = pg.request.get(f'{BASE}/api/office/jobs/{jid}/pack').headers.get('content-security-policy', '')
+    check('the pack allows no inline script except its own', "'unsafe-inline'" not in csp.split('script-src')[1].split(';')[0] and 'nonce-' in csp, csp)
 
     # ---------- people and permissions ----------
     rs = api('POST', f"/people/{lead['id']}/reset")

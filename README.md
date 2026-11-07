@@ -45,6 +45,7 @@ public/crew/             the crew app: index.html, app.js, outbox.js (offline st
 migrations/              0001 accounts, 0002 TM WerX tables
 test/tm.py               end-to-end test (office + crew app on an emulated iPhone, with and without signal)
 test/shots.py            makes the home-page screenshots from a demo company
+test/devices.py          every screen on phones and tablets: sideways scrolling, clipped controls, tap sizes, errors
 ```
 
 ## Setting it up (once)
@@ -97,9 +98,10 @@ uploaded PDF drawings with an equipment list typed in.
 
 ```
 sh test/dev.sh                 # local Worker on :8787 with a mock Stripe; emails go to /dev/outbox
-npx wrangler d1 migrations apply tmwerx -c .wrangler-test.toml --local    # first time only
+npx wrangler d1 migrations apply tmwerx -c .wrangler-test.toml --local    # first time, and after a new migration
 python3 test/tm.py             # the end-to-end test (pip install -r test/requirements.txt)
 python3 test/shots.py          # refresh the home-page screenshots
+python3 test/devices.py        # every screen on iPhone, Android, iPad and Android tablet sizes (about 25 minutes)
 npm run check                  # formatting and lint (npm run format to fix)
 ```
 

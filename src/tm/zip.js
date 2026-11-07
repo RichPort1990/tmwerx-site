@@ -103,7 +103,7 @@ export async function jobZip(env, u, j) {
       for (const d of tables.drawings) {
         const o = await env.FILES.get(d.pdf_key);
         if (!o) continue;
-        const name = `drawings/rev-${d.rev}-${d.id.slice(0, 8)}.pdf`;
+        const name = `drawings/rev-${String(d.rev).replace(/[^\w.-]/g, '_')}-${d.id.slice(0, 8)}.pdf`;
         await add(name, new Uint8Array(await o.arrayBuffer()), new Date(d.created_at));
         list.push(`<li>${esc(name)}: SHA-256 ${esc(d.sha256)}</li>`);
       }

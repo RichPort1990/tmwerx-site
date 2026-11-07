@@ -7,7 +7,14 @@ function wireRange(name) {
   $('#go').onclick = () => (location.hash = `${name}/${val('from')}/${val('to')}`);
 }
 function csv(rows, name) {
-  const s = rows.map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  // a cell starting = + - @ would run as a formula in Excel (client names and addresses come from outside): a
+  // leading apostrophe keeps it as text. Plain numbers, including negative ones, are left alone.
+  const cell = c => {
+    let v = String(c ?? '');
+    if (/^[=+\-@\t\r]/.test(v) && !/^-?\d+(\.\d+)?$/.test(v)) v = "'" + v;
+    return `"${v.replace(/"/g, '""')}"`;
+  };
+  const s = rows.map(r => r.map(cell).join(',')).join('\r\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob(['﻿' + s], { type: 'text/csv' }));
   a.download = name;
