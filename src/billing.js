@@ -2,6 +2,7 @@
 import { esc, msg, page, steps } from './pages.js';
 import { nextStep, timingSafe } from './auth.js';
 import {
+  freeDomain,
   ACTIVE,
   enc,
   freeMail,
@@ -175,6 +176,18 @@ export async function syncSeats(env, cid) {
 
 export async function billing(env, M, u, url) {
   if (!u) return redirect('/login');
+  // an approved free domain (FREE_DOMAINS) that signed up before it was approved: no payment step, ever
+  if (u.role === 'admin' && !ACTIVE.has(u.sub_status) && freeDomain(env, u.email) && !u.stripe_sub) {
+    const d = workDomain(u.email);
+    const taken =
+      d && (await env.DB.prepare('SELECT 1 FROM companies WHERE domain = ? AND id != ?').bind(d, u.company_id).first());
+    await env.DB.prepare(
+      "UPDATE companies SET sub_status = 'free', domain = COALESCE(domain, ?), domain_claim = NULL WHERE id = ?"
+    )
+      .bind(taken ? null : d, u.company_id)
+      .run();
+    return redirect('/app');
+  }
   const ns = await nextStep(env, u);
   if (ns && ns !== '/billing') return redirect(ns);
   if (!ns) return redirect('/account');

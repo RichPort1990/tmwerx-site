@@ -21,7 +21,7 @@ import {
   useToken,
 } from './auth.js';
 import { syncSeats } from './billing.js';
-import { emailOk, now, plain, redirect, redirectC, sendEmail, tooMany, workDomain } from './lib/core.js';
+import { freeDomain, emailOk, now, plain, redirect, redirectC, sendEmail, tooMany, workDomain } from './lib/core.js';
 
 /* ---------- pages ---------- */
 export function home(env, u, sent = '', err = '', v = {}) {
@@ -85,13 +85,21 @@ export async function signup(req, env, M, f, u, ipk) {
     else {
       const cid = crypto.randomUUID(),
         uid = crypto.randomUUID();
-      // the domain is only claimed once this company is confirmed and paying (applySubscription)
+      // the domain is only claimed once this company is confirmed and paying (applySubscription). An approved free
+      // domain (FREE_DOMAINS) skips payment altogether: the company is free from the start and holds its domain, so
+      // colleagues who sign up later are asked to join it rather than starting another
+      const separate = (await exempt(env, v.email)) || isOperator(env, { email: v.email, verified: 1 });
+      const free = freeDomain(env, v.email);
       await env.DB.batch([
-        env.DB.prepare('INSERT INTO companies (id, name, created_at, domain_claim) VALUES (?, ?, ?, ?)').bind(
+        env.DB.prepare(
+          'INSERT INTO companies (id, name, created_at, domain_claim, domain, sub_status) VALUES (?, ?, ?, ?, ?, ?)'
+        ).bind(
           cid,
           v.company,
           now(),
-          (await exempt(env, v.email)) || isOperator(env, { email: v.email, verified: 1 }) ? null : workDomain(v.email)
+          separate || free ? null : workDomain(v.email),
+          free && !separate ? workDomain(v.email) : null,
+          free ? 'free' : 'none'
         ),
         env.DB.prepare(
           'INSERT INTO users (id, company_id, email, name, pass_hash, role, verified, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)'
@@ -122,7 +130,7 @@ export async function orgForDomain(env, email) {
   const d = workDomain(email);
   if (!d || isOperator(env, { email, verified: 1 }) || (await exempt(env, email))) return null;
   return env.DB.prepare(
-    "SELECT id, name FROM companies WHERE domain = ? AND closed_at IS NULL AND sub_status IN ('active','trialing','past_due') ORDER BY created_at LIMIT 1"
+    "SELECT id, name FROM companies WHERE domain = ? AND closed_at IS NULL AND sub_status IN ('active','trialing','past_due','free') ORDER BY created_at LIMIT 1"
   )
     .bind(d)
     .first();
@@ -159,7 +167,7 @@ export function signupAllowed(env, email) {
     .split(',')
     .map(x => x.trim())
     .filter(Boolean);
-  if (list.includes('*')) return true;
+  if (list.includes('*') || freeDomain(env, email)) return true; // approved free domains may always sign up
   const e = email.toLowerCase(),
     d = e.slice(e.lastIndexOf('@'));
   return list.includes(e) || list.includes(d);

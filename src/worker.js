@@ -19,7 +19,7 @@ import {
   logoImg,
   adminLogoImg,
 } from './account.js';
-import { admin, adminCsv, adminExempt, adminLogo } from './admin.js';
+import { admin, adminCsv, adminExempt, adminFree, adminLogo } from './admin.js';
 import { clearCookie, cookie, currentUser, endedHere, loginCode } from './auth.js';
 import { backup } from './backup.js';
 import { billing, billingSuccess, checkout, portal, webhook } from './billing.js';
@@ -182,6 +182,8 @@ async function route(req, env, ctx) {
         : json({ ok: false, reason: (await endedHere(req, env)) ? 'elsewhere' : 'signed-out' }, 401);
     case '/admin/exempt':
       return adminExempt(env, M, f, u);
+    case '/admin/free':
+      return adminFree(env, M, f, u);
     case '/admin/logo':
       return adminLogo(env, M, F, u);
     case '/logout': {

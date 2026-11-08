@@ -96,6 +96,25 @@ with sync_playwright() as p:
         r = pg.goto(BASE + path)
         check(f'{path} is the TM WerX draft', r.status == 200 and word in pg.content() and 'TM WerX' in pg.content())
 
+    # ---------- an approved free domain: sign up with no payment step ----------
+    FREE = f'ops{RUN}@roadconetm.co.uk'
+    sql(f"INSERT OR IGNORE INTO domain_exempt (email, created_at) VALUES ('{FREE}', 0)")   # a fresh company each run
+    fctx = b.new_context(bypass_csp=True)
+    fp = fctx.new_page()
+    fp.goto(BASE + '/signup')
+    fp.fill('#company', 'Roadcone Test'); fp.fill('#name', 'Ro Cone'); fp.fill('#email', FREE); fp.fill('#password', 'correct horse battery')
+    nav(fp, 'main button[type=submit]')
+    check('an approved free domain may sign up (not on the sign-up allow list)', mail(FREE, '/verify?t='), fp.content()[:300])
+    fp.goto(re.search(r'https?://\S+', mail(FREE, '/verify?t=')[0]['body']).group(0))
+    fp.fill('#signed_name', 'Ro Cone'); fp.check('input[name=agree]'); nav(fp, 'main button[type=submit]')
+    check('a free company goes straight into the office app after the agreement, with no payment step', '/app' in fp.url, fp.url)
+    fp.goto(BASE + '/billing')
+    check('the payment page is never shown to it', '/billing' not in fp.url, fp.url)
+    fp.goto(BASE + '/account')
+    acct = fp.content()
+    check('its account says Free and offers no payment set-up', 'Free account' in acct and '/billing/portal' not in acct and 'Set up subscription' not in acct)
+    fctx.close()
+
     # ---------- sign up, verify, agree, pay ----------
     sql('DELETE FROM attempts')   # local runs repeat sign-ups from one address faster than the real limits allow
     sql(f"INSERT OR IGNORE INTO domain_exempt (email, created_at) VALUES ('{ADMIN}', 0)")   # a fresh company each run on the same test domain

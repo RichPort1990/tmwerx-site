@@ -97,7 +97,22 @@ export const emailOk = e =>
   /^[a-z0-9][a-z0-9._%+'-]{0,63}@([a-z0-9-]{1,63}\.)+[a-z]{2,24}$/i.test(e) &&
   e.length <= 254 &&
   !/\.\.|\.@|@-|-\./.test(e);
-export const ACTIVE = new Set(['active', 'trialing', 'past_due']);
+// 'free': an approved company that uses the service without paying (FREE_DOMAINS); never sent to Stripe
+export const ACTIVE = new Set(['active', 'trialing', 'past_due', 'free']);
+// FREE_DOMAINS: comma-separated @domains whose companies sign up and use the service free, with no payment step
+export function freeDomain(env, email) {
+  const e = String(email || '').toLowerCase(),
+    d = e.slice(e.lastIndexOf('@'));
+  return (
+    e.includes('@') &&
+    (env.FREE_DOMAINS || '')
+      .toLowerCase()
+      .split(',')
+      .map(x => x.trim())
+      .filter(Boolean)
+      .includes(d)
+  );
+}
 
 // the company's registered details (Companies Act: on the website and in emails), from the settings; any part not yet
 // filled in (empty, or still a [placeholder]) is left out

@@ -58,6 +58,8 @@ VAPID_PUBLIC_KEY = "BJ4GN6tycMtcu-hRiZrEYbYMZq3rEEdiZEH_c5BKt-UAGMOc_oN0UCx9seSm
 VAPID_SUBJECT = "mailto:support@tmwerx.co.uk"   # who the push services contact about our notifications
 DEV_MODE = "0"                                  # "1" only for local testing: emails go to /dev/outbox instead of being sent
 TRIAL_DAYS = "0"
+# companies from these @domains sign up and use TM WerX free, with no payment step (comma-separated)
+FREE_DOMAINS = "@roadconetm.co.uk"
 STRIPE_PROMO_CODES = "0"
 STRIPE_AUTOMATIC_TAX = "0"
 # Secrets (Cloudflare dashboard, or npx wrangler secret put NAME), never in this file:

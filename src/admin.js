@@ -20,8 +20,21 @@ export async function admin(env, u, url) {
     env,
     'Admin',
     `${css}<h1>Admin</h1>
-<div class="card" id="customers"><h2>Customers</h2>${{ ok: msg('Logo saved for that customer.', 'ok'), none: msg('That customer was not found.'), file: msg('Choose a PNG or JPEG file.'), imgType: msg('Logos must be PNG or JPEG.'), imgSize: msg('Logos must be 1 MB or less.'), imgBad: msg("That file isn't a valid PNG or JPEG.") }[url.searchParams.get('logo')] || ''}<div class="stats"><div><strong>${active.length}</strong>Active subscriptions</div><div><strong>${active.reduce((a, r) => a + (r.seats_paid || 0), 0)}</strong>Paid seats</div><div><strong>${rows.results.reduce((a, r) => a + (r.users || 0), 0)}</strong>Users</div></div>
-<table style="margin-top:14px"><tr><th>Company</th><th>Domain</th><th>Admin</th><th>Users</th><th>Paid seats</th><th>Status</th><th>Jobs</th><th>Since</th><th>Logo</th></tr>${rows.results.map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.domain || (r.domain_claim ? r.domain_claim + ' (held once paying)' : '—'))}</td><td>${esc(r.admin_email || '')}</td><td>${r.users}</td><td>${r.seats_paid || 0}</td><td>${esc(r.sub_status)}</td><td>${r.jobs || 0}</td><td>${new Date(r.created_at).toLocaleDateString('en-GB')}</td><td>${r.closed_at ? '' : `<form method="post" action="/admin/logo" enctype="multipart/form-data" class="logoup"><input type="hidden" name="c" value="${esc(r.id)}"><span class="muted">${r.logo_type ? 'Has a logo' : 'None'}</span> <input type="file" name="logo" accept="image/png,image/jpeg" required aria-label="Logo for ${esc(r.name)}"><button class="sec" type="submit">Upload</button></form>`}</td></tr>`).join('')}</table>
+<div class="card" id="customers"><h2>Customers</h2>${{ free: msg('Done: that customer no longer pays.', 'ok'), paid: msg('Done: that customer is asked to set up payment the next time anyone there signs in.', 'ok'), paying: msg('That customer has a Stripe subscription: cancel it in Stripe first, then make them free.'), ok: msg('Logo saved for that customer.', 'ok'), none: msg('That customer was not found.'), file: msg('Choose a PNG or JPEG file.'), imgType: msg('Logos must be PNG or JPEG.'), imgSize: msg('Logos must be 1 MB or less.'), imgBad: msg("That file isn't a valid PNG or JPEG.") }[url.searchParams.get('logo')] || ''}<div class="stats"><div><strong>${active.filter(r => r.sub_status !== 'free').length}</strong>Paying customers</div><div><strong>${active.filter(r => r.sub_status === 'free').length}</strong>Free customers</div><div><strong>${active.reduce((a, r) => a + (r.seats_paid || 0), 0)}</strong>Paid seats</div><div><strong>${rows.results.reduce((a, r) => a + (r.users || 0), 0)}</strong>Users</div></div>
+<table style="margin-top:14px"><tr><th>Company</th><th>Domain</th><th>Admin</th><th>Users</th><th>Paid seats</th><th>Status</th><th>Payment</th><th>Jobs</th><th>Since</th><th>Logo</th></tr>${rows.results
+      .map(
+        r =>
+          `<tr><td>${esc(r.name)}</td><td>${esc(r.domain || (r.domain_claim ? r.domain_claim + ' (held once paying)' : '—'))}</td><td>${esc(r.admin_email || '')}</td><td>${r.users}</td><td>${r.seats_paid || 0}</td><td>${esc(r.sub_status)}</td><td>${
+            r.closed_at
+              ? ''
+              : r.sub_status === 'free'
+                ? `<form method="post" action="/admin/free" style="margin:0"><input type="hidden" name="c" value="${esc(r.id)}"><input type="hidden" name="off" value="1"><button class="sec" type="submit">Require payment</button></form>`
+                : r.stripe_sub && ACTIVE.has(r.sub_status)
+                  ? '<span class="muted">Paying by Stripe</span>'
+                  : `<form method="post" action="/admin/free" style="margin:0"><input type="hidden" name="c" value="${esc(r.id)}"><button class="sec" type="submit">Make free</button></form>`
+          }</td><td>${r.jobs || 0}</td><td>${new Date(r.created_at).toLocaleDateString('en-GB')}</td><td>${r.closed_at ? '' : `<form method="post" action="/admin/logo" enctype="multipart/form-data" class="logoup"><input type="hidden" name="c" value="${esc(r.id)}"><span class="muted">${r.logo_type ? 'Has a logo' : 'None'}</span> <input type="file" name="logo" accept="image/png,image/jpeg" required aria-label="Logo for ${esc(r.name)}"><button class="sec" type="submit">Upload</button></form>`}</td></tr>`
+      )
+      .join('')}</table>
 <p><a href="/admin/acceptances.csv">Download every signed agreement (CSV)</a></p></div>
 <div class="card"><h2>Separate organisations</h2><p class="muted">Once someone from a company's email domain has signed up, colleagues from that domain are added by its administrator. To let one address start its own organisation instead (another company or branch on the same domain), add it here before they sign up.</p>
 <form method="post" action="/admin/exempt"><label for="xemail">Email address</label><input id="xemail" name="email" type="email" required><button type="submit">Allow a separate organisation</button></form>
@@ -37,6 +50,25 @@ export async function adminLogo(env, M, F, u) {
   if (!c) return redirect('/admin?logo=none#customers');
   const e = await storeLogo(env, id, F.get('logo'));
   return redirect('/admin?logo=' + (e || 'ok') + '#customers');
+}
+// make a customer free (no payment, never sent to Stripe) or ask them to pay again. Companies from FREE_DOMAINS
+// are free from sign-up; this is for any other customer, or to end it
+export async function adminFree(env, M, f, u) {
+  if (!u || !u.super || M !== 'POST') return redirect('/admin');
+  const c = await env.DB.prepare('SELECT id, sub_status, stripe_sub FROM companies WHERE id = ? AND closed_at IS NULL')
+    .bind(f('c').slice(0, 64))
+    .first();
+  if (!c) return redirect('/admin?logo=none#customers');
+  if (f('off')) {
+    if (c.sub_status === 'free')
+      await env.DB.prepare("UPDATE companies SET sub_status = 'none' WHERE id = ? AND sub_status = 'free'")
+        .bind(c.id)
+        .run();
+    return redirect('/admin?logo=paid#customers');
+  }
+  if (c.stripe_sub && ACTIVE.has(c.sub_status)) return redirect('/admin?logo=paying#customers');
+  await env.DB.prepare("UPDATE companies SET sub_status = 'free' WHERE id = ?").bind(c.id).run();
+  return redirect('/admin?logo=free#customers');
 }
 export async function adminExempt(env, M, f, u) {
   if (!u || !u.super || M !== 'POST') return redirect('/admin');

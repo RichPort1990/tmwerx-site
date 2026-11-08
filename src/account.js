@@ -61,9 +61,10 @@ export async function account(env, u, url) {
       unpaid: 'Unpaid',
       incomplete: 'Payment incomplete',
       none: 'Not started',
+      free: 'Free account: no payment needed',
     }[u.sub_status] || u.sub_status;
   h += `<div class="card"><h2>Subscription</h2><p><b>${esc(statusTxt)}</b>${u.seats_paid ? ` · ${u.seats_paid} user${u.seats_paid === 1 ? '' : 's'}` : ''}${u.period_end ? ` · ${u.cancel_at_period_end ? 'ends' : 'renews'} ${new Date(u.period_end).toLocaleDateString('en-GB')}` : ''}</p>
-${u.stripe_customer ? `<form method="post" action="/billing/portal"><button class="sec" type="submit">Payment details, invoices and cancellation</button></form>` : `<a class="btn" href="/billing">Set up subscription</a>`}</div>`;
+${u.sub_status === 'free' ? '' : u.stripe_customer ? `<form method="post" action="/billing/portal"><button class="sec" type="submit">Payment details, invoices and cancellation</button></form>` : `<a class="btn" href="/billing">Set up subscription</a>`}</div>`;
   h += `<div class="card"><h2>Team</h2><table class="cards"><tr><th>Name</th><th>Email</th><th>Role</th><th>Agreement</th><th></th></tr>${team
     .filter(t => !t.disabled)
     .map(
@@ -73,7 +74,7 @@ ${u.stripe_customer ? `<form method="post" action="/billing/portal"><button clas
     .join('')}
 ${pend.map(p => `<tr><td class="muted">Invited</td><td>${esc(p.email)}</td><td>${p.role === 'admin' ? 'Administrator' : 'Office user'}</td><td class="muted">Pending</td><td><form method="post" action="/account/revoke" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="sec" style="margin:0;padding:6px 10px;font-size:13px" type="submit">Cancel invitation</button></form></td></tr>`).join('')}</table>
 <form method="post" action="/account/invite"><div class="row"><div><label for="iemail">Invite by email</label><input id="iemail" name="email" type="email" required value="${esc(emailOk(url.searchParams.get('invite') || '') ? url.searchParams.get('invite') : '')}"></div><div><label for="irole">Role</label><select id="irole" name="role" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:4px;font:inherit"><option value="office">Office user</option><option value="admin">Administrator</option></select></div></div><button type="submit">Send invitation</button></form>
-<p class="muted">Each person who joins is added to the subscription (charged from that day, prorated). Removing someone stops their charge.</p></div>`;
+${u.sub_status === 'free' ? '' : '<p class="muted">Each person who joins is added to the subscription (charged from that day, prorated). Removing someone stops their charge.</p>'}</div>`;
   h += `<div class="card"><h2>Logo for job packs and the crew app</h2>${u.logo_type ? `<p><img class="logo-prev" src="/account/logo.img?v=${now()}" alt="Your logo"></p>` : '<p class="muted">No logo yet: your company name is printed instead.</p>'}
 <form method="post" action="/account/logo" enctype="multipart/form-data"><label for="logo">PNG or JPEG, up to 1 MB. A wide logo works best (about 2:1).</label><input id="logo" name="logo" type="file" accept="image/png,image/jpeg" required><button type="submit">Upload logo</button></form>
 ${u.logo_type ? `<form method="post" action="/account/logo"><input type="hidden" name="delete" value="1"><button class="sec" type="submit">Remove logo</button></form>` : ''}</div>`;
@@ -92,7 +93,8 @@ export async function accountInvite(env, M, f, u, url) {
   const email = f('email').toLowerCase(),
     role = f('role') === 'admin' ? 'admin' : 'office';
   if (!emailOk(email)) return redirect('/account?e=email');
-  if (!['active', 'trialing'].includes(u.sub_status) || u.cancel_at_period_end) return redirect('/account?e=invSub');
+  if (!['active', 'trialing', 'free'].includes(u.sub_status) || u.cancel_at_period_end)
+    return redirect('/account?e=invSub');
   const ex = await env.DB.prepare('SELECT company_id, disabled FROM users WHERE email = ?').bind(email).first();
   if (ex && !(ex.disabled && ex.company_id === u.company_id)) return redirect('/account?m=invited'); // same answer either way: the page doesn't reveal who has an account
   if (
