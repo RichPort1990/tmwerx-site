@@ -29,11 +29,12 @@ migrations_dir = "migrations"
 binding = "FILES"
 bucket_name = "tmwerx-files-eu"               # logos, drawings, photos, documents (private; served only to signed-in users)
 
-# CAD WerX: issued drawings are read from the cadwerx Worker through a private service binding (no public address).
-# Switch this on once CAD WerX has its "Issue for use" endpoints (see README, Linking CAD WerX).
-# [[services]]
-# binding = "CADWERX"
-# service = "cadwerx"
+# CAD WerX: drawings a company sends from CAD WerX ("Send to TM WerX") are read from the cadwerx Worker through a
+# private service binding (no public address). It works once both Workers have the same CADWERX_LINK_SECRET
+# (TMWERX_LINK_SECRET on CAD WerX); until then the office app doesn't offer it. See README, Linking CAD WerX.
+[[services]]
+binding = "CADWERX"
+service = "cadwerx"
 
 [version_metadata]
 binding = "CF_VERSION"

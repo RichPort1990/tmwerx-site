@@ -3,7 +3,7 @@ import { hashPassword } from '../auth.js';
 import { json, now, randToken, readBody, sha256 } from '../lib/core.js';
 import { cadwerxIssue, cadwerxSearch } from './cadwerx.js';
 import { insertEvent } from './events.js';
-import { PDF_MAX, PHOTO_MAX, ext, putOnce, serve, sha256buf, sniff } from './files.js';
+import { PDF_MAX, PHOTO_MAX, drawingName, drawingType, ext, putOnce, serve, sha256buf, sniff } from './files.js';
 import { addIntake, extractRequest, parseEmail } from './intake.js';
 import { evidencePack } from './pack.js';
 import { pushTo } from './push.js';
@@ -119,7 +119,7 @@ R.add('GET', '/boot', async (env, u) => {
     tm_types: TM_TYPES,
     visit_kinds: VISIT_KINDS,
     photo_cats: PHOTO_CATS,
-    cadwerx: !!env.CADWERX,
+    cadwerx: !!(env.CADWERX && env.CADWERX_LINK_SECRET),
   });
 });
 
@@ -1638,9 +1638,7 @@ R.add('GET', '/file/drawing/:id', async (env, u, req, p) => {
   const d = await env.DB.prepare('SELECT * FROM tm_drawings WHERE id = ? AND company_id = ?')
     .bind(p.id, u.company_id)
     .first();
-  return d
-    ? serve(env, d.pdf_key, 'application/pdf', `drawing-${d.rev}.pdf`)
-    : new Response('Not found', { status: 404 });
+  return d ? serve(env, d.pdf_key, drawingType(d), drawingName(d)) : new Response('Not found', { status: 404 });
 });
 R.add('GET', '/file/signature/:id', async (env, u, req, p) => {
   const e = await env.DB.prepare('SELECT signature FROM tm_events WHERE id = ? AND company_id = ?')

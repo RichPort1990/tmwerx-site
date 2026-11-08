@@ -3,7 +3,7 @@
 import { checkPassword, startSession } from '../auth.js';
 import { CK, ipKey, json, now, readBody, sha256, tooMany } from '../lib/core.js';
 import { cleanEvent, applyEvent, insertEvent, phoneTime } from './events.js';
-import { PHOTO_MAX, ext, putOnce, serve, sha256buf, sniff } from './files.js';
+import { PHOTO_MAX, drawingName, drawingType, ext, putOnce, serve, sha256buf, sniff } from './files.js';
 import { makeRouter } from './router.js';
 import { matchPhoto, rulesFor } from './tasks.js';
 import { ukDate, bad, body, crewUser, num, ok, pj, settings, str } from './util.js';
@@ -328,7 +328,7 @@ R.add('GET', '/file/drawing/:id', async (env, u, req, p) => {
     .bind(p.id, u.company_id)
     .first();
   if (!d || !(await mayJob(env, u, d.job_id))) return new Response('Not found', { status: 404 });
-  return serve(env, d.pdf_key, 'application/pdf', `drawing-${d.rev}.pdf`);
+  return serve(env, d.pdf_key, drawingType(d), drawingName(d));
 });
 R.add('GET', '/file/photo/:id', async (env, u, req, p) => {
   const ph = await env.DB.prepare('SELECT * FROM tm_photos WHERE id = ? AND company_id = ?')

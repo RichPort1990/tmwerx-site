@@ -22,6 +22,10 @@ export async function putOnce(env, key, buf, mime) {
   const r = await env.FILES.put(key, buf, { httpMetadata: { contentType: mime }, onlyIf: { etagDoesNotMatch: '*' } });
   return r !== null;
 }
+// a drawing is a PDF (uploaded) or, sent from CAD WerX, the A3 sheets as one HTML page
+export const drawingType = d => (String(d.pdf_key).endsWith('.html') ? 'text/html; charset=utf-8' : 'application/pdf');
+export const drawingName = d =>
+  `drawing-${String(d.rev).replace(/[^\w.-]/g, '_')}.${drawingType(d).startsWith('text/html') ? 'html' : 'pdf'}`;
 export async function serve(env, key, mime, name) {
   const o = await env.FILES.get(key);
   if (!o) return new Response('Not found', { status: 404 });
@@ -31,8 +35,15 @@ export async function serve(env, key, mime, name) {
       'Content-Type': type,
       'Cache-Control': 'private, max-age=86400',
       'X-Content-Type-Options': 'nosniff',
-      // images: nothing in them can run; PDFs: left to the browser's own viewer (a sandbox would stop it opening)
+      // images: nothing in them can run; PDFs: left to the browser's own viewer (a sandbox would stop it opening);
+      // drawing sheets from CAD WerX: shown, never run (no scripts, nothing fetched, only their own embedded images)
       ...(type.startsWith('image/') ? { 'Content-Security-Policy': "default-src 'none'; sandbox" } : {}),
+      ...(type.startsWith('text/html')
+        ? {
+            'Content-Security-Policy':
+              "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; frame-ancestors 'self'; sandbox allow-modals",
+          }
+        : {}),
       ...(name ? { 'Content-Disposition': `inline; filename="${name.replace(/[^\w.-]+/g, '_')}"` } : {}),
     },
   });

@@ -1,6 +1,6 @@
 // A read-only link the office can give a client: the job pack and its files, until the link expires or is switched off.
 import { now, sha256 } from '../lib/core.js';
-import { serve } from './files.js';
+import { drawingName, drawingType, serve } from './files.js';
 import { evidencePack } from './pack.js';
 
 export async function shareRoute(env, url) {
@@ -35,9 +35,7 @@ export async function shareRoute(env, url) {
     const d = await env.DB.prepare('SELECT * FROM tm_drawings WHERE id = ? AND job_id = ? AND company_id = ?')
       .bind(f[2], j.id, j.company_id)
       .first();
-    return d
-      ? serve(env, d.pdf_key, 'application/pdf', `drawing-${d.rev}.pdf`)
-      : new Response('Not found', { status: 404 });
+    return d ? serve(env, d.pdf_key, drawingType(d), drawingName(d)) : new Response('Not found', { status: 404 });
   }
   const e = await env.DB.prepare('SELECT signature FROM tm_events WHERE id = ? AND job_id = ? AND company_id = ?')
     .bind(f[2], j.id, j.company_id)

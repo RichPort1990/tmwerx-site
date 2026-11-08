@@ -19,8 +19,16 @@ async function call(env, cid, path, payload) {
     headers: { 'Content-Type': 'application/json', 'X-TM-Secret': env.CADWERX_LINK_SECRET, 'X-TM-Link': code },
     body: JSON.stringify(payload || {}),
   });
+  if (r.status === 402)
+    return {
+      error:
+        "Your company's CAD WerX subscription isn't active, so drawings can't be taken from CAD WerX. Drawings already on jobs are kept.",
+    };
   if (r.status === 403)
-    return { error: 'CAD WerX refused the link. Ask your CAD WerX administrator for a new link code.' };
+    return {
+      error:
+        'CAD WerX refused the link code. Ask your CAD WerX administrator for a new one (CAD WerX, Account, TM WerX link).',
+    };
   if (!r.ok) return { error: `CAD WerX did not answer (${r.status}).` };
   return r;
 }
@@ -38,16 +46,23 @@ export async function cadwerxIssue(env, u, job, project, version) {
   if (meta.error) return meta;
   const m = await meta.json();
   if (!m.issued) return { error: 'That revision has not been issued for use in CAD WerX.' };
-  const pdf = await call(env, u.company_id, '/pdf', { project: str(project, 64), version: str(version, 64) });
-  if (pdf.error) return pdf;
-  const buf = new Uint8Array(await pdf.arrayBuffer());
-  if (sniff(buf) !== 'application/pdf') return { error: 'CAD WerX sent something that is not a PDF.' };
+  const html = m.format === 'html';
+  const file = await call(env, u.company_id, html ? '/file' : '/pdf', {
+    project: str(project, 64),
+    version: str(version, 64),
+  });
+  if (file.error) return file;
+  const buf = new Uint8Array(await file.arrayBuffer());
+  if (buf.length > 25 * 1024 * 1024) return { error: 'The drawing from CAD WerX is too large.' };
+  const head = new TextDecoder().decode(buf.slice(0, 15)).toLowerCase();
+  if (html ? head !== '<!doctype html>' : sniff(buf) !== 'application/pdf')
+    return { error: 'CAD WerX sent something that is not a drawing.' };
   const sha = await sha256buf(buf);
   if (m.sha256 && m.sha256 !== sha)
     return { error: "The drawing changed on its way from CAD WerX (the fingerprints don't match). Try again." };
   const id = uid(),
-    key = `co/${u.company_id}/drawings/${id}.pdf`;
-  await putOnce(env, key, buf, 'application/pdf');
+    key = `co/${u.company_id}/drawings/${id}.${html ? 'html' : 'pdf'}`;
+  await putOnce(env, key, buf, html ? 'text/html; charset=utf-8' : 'application/pdf');
   const equipment = (m.equipment || [])
     .map(i => ({ code: str(i.code, 40), name: str(i.name, 120), qty: Math.max(0, Math.round(+i.qty || 0)) }))
     .filter(i => i.name);

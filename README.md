@@ -80,19 +80,33 @@ You need: the Cloudflare account that holds tmwerx.co.uk (Workers Paid), Stripe,
 
 ## Linking CAD WerX
 
-TM WerX reads issued drawings from the `cadwerx` Worker through a service binding: no public endpoint. To switch it
-on, uncomment `[[services]]` in `wrangler.toml`, set the same `CADWERX_LINK_SECRET` on both Workers, and add these
-three routes to CAD WerX (`POST`, JSON in, called only via the binding, refused unless `X-TM-Secret` matches):
+A company that has **both** subscriptions can put drawings from CAD WerX on TM WerX jobs. Neither can be used
+without its own subscription:
 
-| Route | Body | Answer |
-|---|---|---|
-| `/internal/tm/search` | `{ q }` | `{ results: [{ id, name, address, updated, version }] }`: issued projects of the company whose link code is in `X-TM-Link` |
-| `/internal/tm/issue` | `{ project, version }` | `{ issued, rev, drawing_no, approved_by, approved_at, sha256, pages, equipment: [{code, name, qty}], street, town, postcode, usrn, client_ref, hours, w3w, tm_type, start_date, end_date, lat, lng }` |
-| `/internal/tm/pdf` | `{ project, version }` | the issued PDF |
+- **TM WerX** checks its own subscription before asking CAD WerX for anything (the office app is closed without it).
+- **CAD WerX** answers only with a link code its administrator made (CAD WerX Account, TM WerX link; stored hashed,
+  cancellable, and only an active CAD WerX subscription can make one), and on **every** request it checks that
+  subscription is still active. If not, TM WerX says "Your company's CAD WerX subscription isn't active". Drawings
+  already copied onto jobs stay: they are the record of what the crew worked to.
 
-`X-TM-Link` is a code a CAD WerX administrator makes (CAD WerX Account → TM WerX link) and pastes into TM WerX
-Settings; answer 403 if it is unknown or revoked. The PDF's SHA-256 must match `sha256`. Until this exists, jobs take
-uploaded PDF drawings with an equipment list typed in.
+How a drawing gets across:
+
+1. In the CAD WerX designer, a **saved** drawing (no unsaved changes) has **Send to TM WerX** in its project bar.
+   The A3 sheets exactly as they print, the sign schedule and equipment list (as drawn: TM WerX adds the company's
+   spares when loading) and the site details (dates, hours, USRN, what3words, position, type of TM) are stored in
+   CAD WerX as an issued drawing (`tm_issues`, the sheets in R2 under `tm/<company>/`). Sheets with MasterMap line
+   work cannot be sent (OS Premium data may not go on commercial drawings).
+2. In TM WerX, the job's **Drawing and kit** tab searches the company's issued drawings and copies the chosen one
+   (fingerprint checked) onto the job. The sheets are served as one page with no scripts allowed (sandboxed).
+
+The two Workers talk through Cloudflare's private service binding (`[[services]] CADWERX` in `wrangler.toml`),
+never a public address. To switch it on, set the same long random secret on both:
+`CADWERX_LINK_SECRET` on TM WerX and `TMWERX_LINK_SECRET` on CAD WerX (Settings, Variables and secrets, type Secret).
+Until both are set, TM WerX doesn't offer CAD WerX drawings and CAD WerX's link addresses answer "not found".
+
+CAD WerX's side (`src/tmlink.js` there): `POST /internal/tm/search {q}`, `/internal/tm/issue {project}` and
+`/internal/tm/file {project}`, each needing `X-TM-Secret` and `X-TM-Link`; 403 for an unknown or cancelled code,
+402 when the CAD WerX subscription isn't active.
 
 ## Working on it
 

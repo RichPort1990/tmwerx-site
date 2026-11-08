@@ -353,14 +353,14 @@ function tabDrawing(t, J) {
   t.innerHTML = `<div class="grid2"><div class="card"><h2>Current drawing</h2>${
     cur
       ? `<p><b>Rev ${esc(cur.rev)}</b>${cur.drawing_no ? ' · ' + esc(cur.drawing_no) : ''} · ${cur.source === 'cadwerx' ? 'from CAD WerX' : 'uploaded PDF'} · ${fmtDT(cur.created_at)}${cur.by_name ? ' by ' + esc(cur.by_name) : ''}</p>
-<p class="muted mono">SHA-256 ${esc(cur.sha256)}</p>${cur.note ? `<p>${esc(cur.note)}</p>` : ''}<p><a class="btn sec" target="_blank" href="/api/office/file/drawing/${esc(cur.id)}">Open PDF</a></p>`
+<p class="muted mono">SHA-256 ${esc(cur.sha256)}</p>${cur.note ? `<p>${esc(cur.note)}</p>` : ''}<p><a class="btn sec" target="_blank" href="/api/office/file/drawing/${esc(cur.id)}">Open drawing</a></p>`
       : '<p class="empty">No drawing yet.</p>'
   }
 <h3>Add a drawing or new revision</h3><div class="row"><div class="narrow"><label>Revision</label><input type="text" id="rev" value="${cur ? nextRev(cur.rev) : 'A'}"></div><div><label>Drawing number</label><input type="text" id="dno" value="${esc(cur ? cur.drawing_no || '' : '')}"></div></div>
 <label>Note</label><input type="text" id="dnote" placeholder="What changed">
 <label>PDF (25 MB or smaller)</label><input type="file" id="pdf" accept="application/pdf"><p class="muted">The equipment list below goes with it. Scheduled visits move to the new drawing; visits under way keep theirs until you apply it.</p>
 <button id="up">Upload drawing</button>
-${B.boot.cadwerx ? `<h3>Or from CAD WerX</h3><div class="row"><div><input type="search" id="cq" placeholder="Search your saved CAD WerX drawings"></div><div class="narrow"><button class="sec" id="cs">Search</button></div></div><div id="cr"></div>` : ''}</div>
+${B.boot.cadwerx ? `<h3>Or a drawing sent from CAD WerX</h3><p class="muted">In CAD WerX, open the saved drawing and press <b>Send to TM WerX</b>; it then appears here.</p><div class="row"><div><input type="search" id="cq" placeholder="Search your saved CAD WerX drawings"></div><div class="narrow"><button class="sec" id="cs">Search</button></div></div><div id="cr"></div>` : ''}</div>
 <div class="card"><h2>Equipment to load</h2>${cur && cur.source === 'cadwerx' ? `<p class="muted">From CAD WerX. Issue a new revision there to change it.</p>${equipTable(cur.equipment, false)}` : `<p class="muted">The crew count this onto the van and back off at the end. ${B.boot.settings.spares_pct ? `They're asked to add ${B.boot.settings.spares_pct}% spares.` : ''}</p>${equipTable(cur ? cur.equipment : [], true)}${cur ? '<div style="margin-top:12px"><button id="eqSave">Save list</button></div>' : ''}`}</div></div>
 ${
   J.drawings.length > 1
@@ -369,7 +369,7 @@ ${
         .reverse()
         .map(
           d =>
-            `<tr><td>Rev ${esc(d.rev)}</td><td>${fmtDT(d.created_at)}</td><td class="mono">${esc(d.sha256.slice(0, 16))}…</td><td><a target="_blank" href="/api/office/file/drawing/${esc(d.id)}">PDF</a></td></tr>`
+            `<tr><td>Rev ${esc(d.rev)}</td><td>${fmtDT(d.created_at)}</td><td class="mono">${esc(d.sha256.slice(0, 16))}…</td><td><a target="_blank" href="/api/office/file/drawing/${esc(d.id)}">Open</a></td></tr>`
         )
         .join('')}</table></div>`
     : ''
