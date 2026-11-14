@@ -1,7 +1,7 @@
 # TM WerX
 
 Jobs, crews and site records for traffic management companies, at **tmwerx.co.uk**. A sister product to CAD WerX,
-run by CAD WerX Limited.
+run by Hades WerX Limited.
 
 - **Office app** (`/app`): live view, weekly board, jobs with visits, crews, vans and drawings, job requests from
   email or pasted messages, crew logins and qualifications, vehicles, clients, versioned RAMS and vehicle-check

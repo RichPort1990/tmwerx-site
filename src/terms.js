@@ -1,6 +1,6 @@
 // The customer agreement. DRAFT for review by a solicitor before any customer signs it.
 // Changing the text means a new TERMS_VERSION: every user is asked to accept the new version at their next sign-in.
-export const TERMS_VERSION = '2026-11-tm-draft-1';
+export const TERMS_VERSION = '2026-11-tm-draft-2';
 
 export function termsHtml(env) {
   const A = env.PROVIDER_ADDRESS || '[Registered office address]';
@@ -11,7 +11,7 @@ export function termsHtml(env) {
 <h2>${S} — Customer Agreement</h2>
 <p>Version ${TERMS_VERSION}.</p>
 <h3 id="about">1. About this agreement</h3>
-<p>1.1 This agreement is between <strong>CAD WerX Limited</strong>, a company registered in England and Wales with number ${env.PROVIDER_NUMBER || '[company number]'} and registered office at ${A} (“<strong>we</strong>”, “<strong>us</strong>”), and the organisation named when the account was opened (the “<strong>Customer</strong>”, “<strong>you</strong>”).</p>
+<p>1.1 This agreement is between <strong>${env.PROVIDER_NAME || 'Hades WerX Limited'}</strong>, a company registered in England and Wales with number ${env.PROVIDER_NUMBER || '[company number]'} and registered office at ${A} (“<strong>we</strong>”, “<strong>us</strong>”), and the organisation named when the account was opened (the “<strong>Customer</strong>”, “<strong>you</strong>”).</p>
 <p>1.2 The person who opens the account accepts this agreement on the Customer’s behalf and confirms they are authorised to do so. Each office user also accepts it before using the Service.</p>
 <p>1.3 The Service is for businesses only. It is not offered to consumers.</p>
 <h3 id="service">2. The Service</h3>

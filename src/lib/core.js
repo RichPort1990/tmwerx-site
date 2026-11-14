@@ -121,7 +121,7 @@ export function companyLine(env) {
     const x = String(env[k] || '').trim();
     return x && !/^\[.*\]$/.test(x) ? x : '';
   };
-  const name = v('PROVIDER_NAME') || 'CAD WerX Limited',
+  const name = v('PROVIDER_NAME') || 'Hades WerX Limited',
     no = v('PROVIDER_NUMBER'),
     addr = v('PROVIDER_ADDRESS');
   return `${name}, a company registered in England and Wales${no ? ', number ' + no : ''}${addr ? '. Registered office: ' + addr : ''}.`;
