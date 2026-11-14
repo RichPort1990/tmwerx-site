@@ -1,6 +1,6 @@
 // The privacy policy and cookie notice. DRAFT for review by a solicitor before publication.
 // Changing the text means a new PRIVACY_VERSION.
-export const PRIVACY_VERSION = '2026-11-tm-draft-1';
+export const PRIVACY_VERSION = '2026-11-tm-draft-2';
 
 export function privacyHtml(env) {
   const A = env.PROVIDER_ADDRESS || '[Registered office address]';
@@ -12,7 +12,7 @@ export function privacyHtml(env) {
 <p>Version ${PRIVACY_VERSION}.</p>
 <h2 id="privacy-policy">Privacy policy</h2>
 <h2 id="who-we-are">1. Who we are</h2>
-<p>CAD WerX Limited (“we”) runs TM WerX, a job, crew and site-record service for traffic management companies, at tmwerx.co.uk. We are a company registered in England and Wales, number ${env.PROVIDER_NUMBER || '[company number]'}, registered office ${A}. We are registered with the Information Commissioner’s Office, number ${env.PROVIDER_ICO || '[ICO number]'}.</p>
+<p>${env.PROVIDER_NAME || 'Hades WerX Limited'} (“we”) runs TM WerX, a job, crew and site-record service for traffic management companies, at tmwerx.co.uk. We are a company registered in England and Wales, number ${env.PROVIDER_NUMBER || '[company number]'}, registered office ${A}. We are registered with the Information Commissioner’s Office, number ${env.PROVIDER_ICO || '[ICO number]'}.</p>
 <p>For anything about your personal data, email ${E} or write to us at the registered office.</p>
 <h2 id="who-this-policy-covers">2. Who this policy covers</h2>
 <p>This policy covers office users and crew members who use TM WerX for a customer company, people invited to join a customer’s account, billing contacts, and visitors to tmwerx.co.uk. TM WerX is a business service and is not for anyone under 18.</p>

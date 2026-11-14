@@ -189,7 +189,7 @@ ${sent ? `<p class="alert ok" role="status">Thanks, your message has been sent. 
 <p class="fine">We use these details only to reply to you. See our <a href="/privacy">privacy policy</a>.</p></form>
 </div></section>
 </main>
-<footer><div class="wrap"><a class="mark" href="/">TM Wer<span>X</span></a><span>© ${new Date().getFullYear()} ${esc(env.PROVIDER_NAME || 'CAD WerX Limited')}</span>
+<footer><div class="wrap"><a class="mark" href="/">TM Wer<span>X</span></a><span>© ${new Date().getFullYear()} ${esc(env.PROVIDER_NAME || 'Hades WerX Limited')}</span>
 <a href="/terms">Customer agreement</a><a href="/privacy">Privacy and cookies</a><a href="/about">Data sources</a><a href="https://cadwerx.co.uk">CAD WerX</a><a href="mailto:${support}">${support}</a>
 <p class="src">Photo of road works in Leeds by Look Again Digital on Unsplash. Postcode positions from postcodes.io (contains OS data © Crown copyright and database right; Royal Mail data © Royal Mail copyright and database right; National Statistics data © Crown copyright).</p><p class="src">${esc(companyLine(env))}</p></div></footer>
 </body></html>`;
